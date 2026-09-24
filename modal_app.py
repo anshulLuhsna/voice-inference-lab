@@ -1,12 +1,14 @@
 """voice-inference-lab -- Modal execution for voice model inference.
 
-Two functions:
+Three functions, in the order you would run them:
 
     modal run modal_app.py::inspect_gpu      # plumbing check
     modal run modal_app.py::cache_weights    # PHASE 1 -- CPU only, no GPU
+    modal run modal_app.py::load_model       # PHASE 2 -- runs on the A10
 
-Phase 1 exists for one reason: moving ~15.8 GB of weights must never happen on
-a GPU. A CPU container pays to move the bytes once, into a persistent Volume.
+The split exists for one reason: moving ~15.8 GB of weights must never happen on
+a GPU. Phase 1 pays for a CPU container to move the bytes; Phase 2 pays for the
+A10 only to work with weights that are already on disk.
 """
 
 import modal
@@ -54,6 +56,15 @@ cache_image = (
     .env({"HF_HOME": HF_HOME, "HF_XET_HIGH_PERFORMANCE": "1"})
 )
 
+# PHASE 2 image. Needs the pinned torch and moshi, and is forced offline so it
+# can only ever read the Volume -- a missing file becomes a loud error rather
+# than a silent re-download.
+load_image = (
+    modal.Image.debian_slim(python_version=PYTHON_VERSION)
+    .uv_pip_install(TORCH_PACKAGE, MOSHI_PACKAGE)
+    .env({"HF_HOME": HF_HOME, "HF_HUB_OFFLINE": "1"})
+)
+
 # The plumbing check deliberately floats torch so it reports whatever the
 # platform hands out by default. That contrast is the point of keeping it.
 check_image = modal.Image.debian_slim().uv_pip_install("torch", "numpy")
@@ -69,6 +80,32 @@ def _snapshot(repo: str, revision: str, offline: bool) -> str:
     from huggingface_hub import snapshot_download
 
     return snapshot_download(repo_id=repo, revision=revision, local_files_only=offline)
+
+
+def _resolve_weights(loaders) -> dict:
+    """Resolve the pinned weight files inside the cached snapshot.
+
+    Raises with a clear message when moshi expects a different repo, or when a
+    file is absent. Offline resolution is set by the image environment, so a
+    cache miss surfaces here instead of silently fetching.
+    """
+    from pathlib import Path
+
+    if loaders.DEFAULT_REPO != MOSHI_REPO:
+        raise RuntimeError(
+            f"moshi expects {loaders.DEFAULT_REPO!r}, but this file pins {MOSHI_REPO!r}."
+        )
+
+    snapshot = _snapshot(MOSHI_REPO, MOSHI_REVISION, offline=True)
+    weights = {
+        "moshi": f"{snapshot}/{loaders.MOSHI_NAME}",
+        "mimi": f"{snapshot}/{loaders.MIMI_NAME}",
+        "tokenizer": f"{snapshot}/{loaders.TEXT_TOKENIZER_NAME}",
+    }
+    missing = [name for name, path in weights.items() if not Path(path).is_file()]
+    if missing:
+        raise RuntimeError(f"Missing {', '.join(missing)} in {snapshot}; cache incomplete.")
+    return weights
 
 
 def _json(report: dict) -> str:
@@ -122,6 +159,77 @@ def cache_weights() -> str:
     return _json(report)
 
 
+@app.function(
+    image=load_image,
+    gpu="A10G",
+    volumes={VOLUME_PATH: volume},
+    timeout=1800,
+    min_containers=0,
+)
+def load_model() -> str:
+    """PHASE 2 -- loads the weights from the Volume.
+
+    Records model initialization time and GPU memory either side of each
+    component. This phase never commits anything, so the cached weights are
+    left untouched.
+    """
+    import time
+    import traceback
+
+    import torch
+    from moshi.models import loaders
+
+    report = {
+        "torch": torch.__version__,
+        "torch_cuda": torch.version.cuda,
+        "cuda_available": torch.cuda.is_available(),
+    }
+    if not report["cuda_available"]:
+        report["error"] = "CUDA is unavailable; refusing to fall back to CPU."
+        return _json(report)
+
+    def vram() -> dict:
+        free, total = torch.cuda.mem_get_info()
+        return {
+            "allocated_gb": round(torch.cuda.memory_allocated() / 1e9, 3),
+            "free_gb": round(free / 1e9, 2),
+            "total_gb": round(total / 1e9, 2),
+        }
+
+    def timed(label: str, load):
+        """Run one component's load and record how long it took and its VRAM."""
+        start = time.perf_counter()
+        result = load()
+        torch.cuda.synchronize()
+        report[label] = {
+            "init_ms": round((time.perf_counter() - start) * 1000),
+            "vram_after": vram(),
+        }
+        return result
+
+    try:
+        weights = _resolve_weights(loaders)
+        report["weights"] = weights
+
+        torch.cuda.reset_peak_memory_stats()
+        report["vram_baseline"] = vram()
+
+        mimi = timed("mimi", lambda: loaders.get_mimi(weights["mimi"], device="cuda"))
+        moshi = timed("moshi", lambda: loaders.get_moshi_lm(weights["moshi"], device="cuda"))
+
+        report["peak_allocated_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 3)
+        report["parameters"] = {
+            "mimi": sum(p.numel() for p in mimi.parameters()),
+            "moshi": sum(p.numel() for p in moshi.parameters()),
+        }
+        report["loaded"] = True
+    except Exception:
+        report["loaded"] = False
+        report["error"] = traceback.format_exc()
+
+    return _json(report)
+
+
 @app.function(image=check_image, gpu="A10G", min_containers=0)
 def inspect_gpu() -> str:
     """Plumbing check: proves CUDA is reachable and that a real tensor op runs.
@@ -172,8 +280,3 @@ def inspect_gpu() -> str:
         )
 
     return _json(report)
-
-
-@app.local_entrypoint()
-def main() -> None:
-    print(inspect_gpu.remote())
