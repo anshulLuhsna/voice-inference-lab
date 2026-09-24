@@ -1,14 +1,15 @@
 """voice-inference-lab -- Modal execution for voice model inference.
 
-Three functions, in the order you would run them:
+Four functions, in the order you would run them:
 
     modal run modal_app.py::inspect_gpu      # plumbing check
     modal run modal_app.py::cache_weights    # PHASE 1 -- CPU only, no GPU
     modal run modal_app.py::load_model       # PHASE 2 -- runs on the A10
+    modal run modal_app.py::stream_session   # PHASE 3 -- runs on the A10
 
 The split exists for one reason: moving ~15.8 GB of weights must never happen on
-a GPU. Phase 1 pays for a CPU container to move the bytes; Phase 2 pays for the
-A10 only to work with weights that are already on disk.
+a GPU. Phase 1 pays for a CPU container to move the bytes; later phases pay for
+the A10 only to work with weights that are already on disk.
 """
 
 import modal
@@ -46,6 +47,19 @@ PYTHON_VERSION = "3.12"
 VOLUME_PATH = "/cache"
 HF_HOME = f"{VOLUME_PATH}/hf"
 
+# The fixed audio fixture, and where the generated audio is written.
+#
+# The fixture is the one Kyutai reference in their own sphn README. It lives on
+# the Volume rather than in the repo, and Phase 1 records its SHA-256 so later
+# runs are comparable.
+FIXTURE_URL = "https://github.com/metavoiceio/metavoice-src/raw/main/assets/bria.mp3"
+FIXTURE_PATH = f"{VOLUME_PATH}/fixtures/bria.mp3"
+OUTPUT_PATH = f"{VOLUME_PATH}/outputs/session.wav"
+
+# Moshi is full-duplex: it never decides that a turn has ended. After the clip
+# finishes we keep feeding silence, so the model has room to speak.
+TAIL_SECONDS = 5.0
+
 volume = modal.Volume.from_name("voice-inference-lab-hf-cache", create_if_missing=True)
 
 # PHASE 1 image. The downloader needs no torch and no CUDA, and leaving them
@@ -56,9 +70,9 @@ cache_image = (
     .env({"HF_HOME": HF_HOME, "HF_XET_HIGH_PERFORMANCE": "1"})
 )
 
-# PHASE 2 image. Needs the pinned torch and moshi, and is forced offline so it
-# can only ever read the Volume -- a missing file becomes a loud error rather
-# than a silent re-download.
+# PHASE 2 and PHASE 3 image. Needs the pinned torch and moshi, and is forced
+# offline so it can only ever read the Volume -- a missing file becomes a loud
+# error rather than a silent re-download.
 load_image = (
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
     .uv_pip_install(TORCH_PACKAGE, MOSHI_PACKAGE)
@@ -125,10 +139,12 @@ def _json(report: dict) -> str:
 def cache_weights() -> str:
     """PHASE 1 -- CPU only. No GPU is attached to this container.
 
-    Downloads the pinned snapshot into the Volume and commits it, so the
-    ~15.8 GB transfer is billed as CPU time plus storage, never as A10 time.
-    Reports whether the checkpoint was already present.
+    Downloads the pinned snapshot and the audio fixture into the Volume, then
+    commits them. The ~15.8 GB transfer is billed as CPU time plus storage,
+    never as A10 time. Reports whether each item was already present.
     """
+    import hashlib
+    import urllib.request
     from pathlib import Path
 
     # Reconstruct the cache location huggingface_hub will use, so we can tell
@@ -145,12 +161,28 @@ def cache_weights() -> str:
     path = _snapshot(MOSHI_REPO, MOSHI_REVISION, offline=False)
     size = sum(f.stat().st_size for f in Path(path).rglob("*") if f.is_file())
 
+    # The fixture is fetched here rather than during a GPU run, for the same
+    # reason as the weights: no A10 should be billed to move bytes.
+    fixture = Path(FIXTURE_PATH)
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    if not fixture.is_file():
+        urllib.request.urlretrieve(FIXTURE_URL, fixture)
+    fixture_bytes = fixture.read_bytes()
+
     report = {
-        "repo": MOSHI_REPO,
-        "status": "already present" if already_present else "downloaded",
-        "revision": MOSHI_REVISION,
-        "path": path,
-        "size_gb": round(size / 1e9, 2),
+        "checkpoint": {
+            "repo": MOSHI_REPO,
+            "status": "already present" if already_present else "downloaded",
+            "revision": MOSHI_REVISION,
+            "path": path,
+            "size_gb": round(size / 1e9, 2),
+        },
+        "fixture": {
+            "url": FIXTURE_URL,
+            "path": str(fixture),
+            "size_mb": round(len(fixture_bytes) / 1e6, 2),
+            "sha256": hashlib.sha256(fixture_bytes).hexdigest(),
+        },
     }
 
     # Nothing written above is durable until this returns.
@@ -226,6 +258,206 @@ def load_model() -> str:
     except Exception:
         report["loaded"] = False
         report["error"] = traceback.format_exc()
+
+    return _json(report)
+
+
+@app.function(
+    image=load_image,
+    gpu="A10G",
+    volumes={VOLUME_PATH: volume},
+    timeout=1800,
+    min_containers=0,
+)
+def stream_session() -> str:
+    """PHASE 3 -- streams the fixture through the Moshi streaming path.
+
+    The loop below is the official streaming runtime, one frame at a time:
+
+      1. ``mimi.encode`` turns 1920 input samples into 8 codebooks.
+      2. ``lm_gen.step`` advances the Moshi language model by one frame.
+      3. ``mimi.decode`` turns the model's 8 output codebooks back into audio.
+
+    Moshi emits no output for the first frame, because its output streams are
+    delayed relative to its inputs. Once the input clip ends we keep feeding
+    silence, so the model has room to speak.
+
+    Unlike Phase 2, this phase commits the Volume, because the generated audio
+    must outlive the container. It writes only under ``outputs/``.
+    """
+    import time
+    import traceback
+    import wave
+    from pathlib import Path
+
+    import numpy as np
+    import sphn
+    import torch
+    from moshi.models import LMGen, loaders
+
+    sample_rate = loaders.SAMPLE_RATE
+    frame_rate = loaders.FRAME_RATE
+
+    report = {
+        "torch": torch.__version__,
+        "torch_cuda": torch.version.cuda,
+        "cuda_available": torch.cuda.is_available(),
+    }
+    if not report["cuda_available"]:
+        report["error"] = "CUDA is unavailable; refusing to fall back to CPU."
+        return _json(report)
+
+    def vram() -> dict:
+        free, total = torch.cuda.mem_get_info()
+        return {
+            "allocated_gb": round(torch.cuda.memory_allocated() / 1e9, 3),
+            "free_gb": round(free / 1e9, 2),
+            "total_gb": round(total / 1e9, 2),
+        }
+
+    pieces = []
+    try:
+        weights = _resolve_weights(loaders)
+
+        load_start = time.perf_counter()
+        mimi = loaders.get_mimi(weights["mimi"], device="cuda")
+        moshi = loaders.get_moshi_lm(weights["moshi"], device="cuda")
+        torch.cuda.synchronize()
+        report["model_load_ms"] = round((time.perf_counter() - load_start) * 1000)
+
+        frame_size = mimi.frame_size
+
+        # Decode the fixture. Moshi wants 24 kHz mono, so resample only when the
+        # fixture disagrees, and report the source rate either way.
+        fixture = Path(FIXTURE_PATH)
+        if not fixture.is_file():
+            report["error"] = f"Fixture missing at {fixture}. Run cache_weights first."
+            return _json(report)
+
+        audio_np, source_rate = sphn.read(str(fixture))
+        wav = torch.as_tensor(np.asarray(audio_np)).float()
+        if wav.dim() == 1:
+            wav = wav[None]
+        if wav.shape[0] > 1:
+            wav = wav.mean(dim=0, keepdim=True)
+        input_seconds = round(wav.shape[-1] / source_rate, 2)
+        if source_rate != sample_rate:
+            target = int(round(wav.shape[-1] * sample_rate / source_rate))
+            wav = torch.nn.functional.interpolate(
+                wav[None], size=target, mode="linear", align_corners=False
+            )[0]
+
+        # Moshi requires whole frames. Pad the tail of the clip with silence.
+        padding = (-wav.shape[-1]) % frame_size
+        if padding:
+            wav = torch.cat([wav, torch.zeros(1, padding)], dim=-1)
+        clip = [wav[:, start : start + frame_size] for start in range(0, wav.shape[-1], frame_size)]
+        silence = torch.zeros(1, frame_size)
+        tail_frames = int(round(TAIL_SECONDS * frame_rate))
+        total_frames = len(clip) + tail_frames
+
+        report["fixture"] = {
+            "path": str(fixture),
+            "source_sample_rate": source_rate,
+            "resampled": source_rate != sample_rate,
+            "input_seconds": input_seconds,
+            "padded_samples": padding,
+        }
+        report["frame"] = {
+            "frame_size_samples": frame_size,
+            "frame_rate_hz": frame_rate,
+            "clip_frames": len(clip),
+            "tail_frames": tail_frames,
+            "total_frames": total_frames,
+        }
+
+        torch.cuda.reset_peak_memory_stats()
+        report["vram_before_session"] = vram()
+        minimum_free = None
+
+        lm_gen = LMGen(moshi, temp=0.8, temp_text=0.7)
+
+        init_start = time.perf_counter()
+        with torch.no_grad(), lm_gen.streaming(1), mimi.streaming(1):
+            torch.cuda.synchronize()
+            init_ms = (time.perf_counter() - init_start) * 1000
+            start = time.perf_counter()
+
+            first_chunk_ms = first_output_ms = first_audio_ms = None
+            first_output_frame = None
+
+            for index in range(total_frames):
+                chunk = (clip[index] if index < len(clip) else silence).unsqueeze(0).cuda()
+
+                if first_chunk_ms is None:
+                    torch.cuda.synchronize()
+                    first_chunk_ms = (time.perf_counter() - start) * 1000
+
+                codes = mimi.encode(chunk)
+                tokens = lm_gen.step(codes)
+
+                if tokens is not None:
+                    torch.cuda.synchronize()
+                    if first_output_ms is None:
+                        first_output_ms = (time.perf_counter() - start) * 1000
+                        first_output_frame = index
+                    decoded = mimi.decode(tokens[:, 1:])
+                    if first_audio_ms is None:
+                        torch.cuda.synchronize()
+                        first_audio_ms = (time.perf_counter() - start) * 1000
+                    pieces.append(decoded[0].float().cpu())
+
+                free, _ = torch.cuda.mem_get_info()
+                minimum_free = free if minimum_free is None else min(minimum_free, free)
+
+            torch.cuda.synchronize()
+            total_ms = (time.perf_counter() - start) * 1000
+
+        report["session"] = {
+            "streaming_context_init_ms": round(init_ms),
+            "first_chunk_submitted_ms": round(first_chunk_ms) if first_chunk_ms else None,
+            "first_model_output_ms": round(first_output_ms) if first_output_ms else None,
+            "first_output_at_frame": first_output_frame,
+            "first_decoded_audio_ms": round(first_audio_ms) if first_audio_ms else None,
+            "total_ms": round(total_ms),
+            "unpaced": True,
+        }
+        report["memory"] = {
+            "vram_after_session": vram(),
+            "peak_allocated_gb": round(torch.cuda.max_memory_allocated() / 1e9, 3),
+            "peak_reserved_gb": round(torch.cuda.max_memory_reserved() / 1e9, 3),
+            "min_device_free_gb": round(minimum_free / 1e9, 2),
+        }
+        report["oom"] = False
+        report["completed"] = True
+    except torch.cuda.OutOfMemoryError:
+        report["oom"] = True
+        report["completed"] = False
+        report["error"] = traceback.format_exc()
+    except Exception:
+        report["oom"] = False
+        report["completed"] = False
+        report["error"] = traceback.format_exc()
+
+    # Save whatever audio we produced, so a partial run is still inspectable.
+    if pieces:
+        generated = torch.cat(pieces, dim=-1).clamp(-1, 1)
+        out_path = Path(OUTPUT_PATH)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        pcm = (generated * 32767).to(torch.int16).numpy().tobytes()
+        with wave.open(str(out_path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm)
+
+        # The audio must outlive the container, so this phase does commit.
+        volume.commit()
+        report["audio"] = {
+            "path": str(out_path),
+            "output_seconds": round(generated.shape[-1] / sample_rate, 2),
+            "volume_committed": True,
+        }
 
     return _json(report)
 
