@@ -52,13 +52,38 @@ HF_HOME = f"{VOLUME_PATH}/hf"
 # The fixture is the one Kyutai reference in their own sphn README. It lives on
 # the Volume rather than in the repo, and Phase 1 records its SHA-256 so later
 # runs are comparable.
+#
+# The file is about 45 seconds of narration, which is far too long for a
+# conversational test, so we take a fixed window from it. Both numbers are
+# constants, so the window is identical on every run.
 FIXTURE_URL = "https://github.com/metavoiceio/metavoice-src/raw/main/assets/bria.mp3"
 FIXTURE_PATH = f"{VOLUME_PATH}/fixtures/bria.mp3"
-OUTPUT_PATH = f"{VOLUME_PATH}/outputs/session.wav"
+FIXTURE_START_SECONDS = 0.0
+FIXTURE_SECONDS = 8.0
 
 # Moshi is full-duplex: it never decides that a turn has ended. After the clip
 # finishes we keep feeding silence, so the model has room to speak.
 TAIL_SECONDS = 5.0
+
+# Moshi declares a one frame delay on its outputs, and the first decoded frame
+# arrives on loop iteration 1. Each decoded frame is therefore placed on the
+# shared timeline at the iteration that produced it. Set this to 0 if the mix
+# sounds 80 ms early.
+OUTPUT_OFFSET_FRAMES = 1
+
+# Each track is attenuated before the sum, so mixed.wav cannot clip and neither
+# voice is favoured.
+MIX_SCALE = 0.5
+
+# The first frames carry CUDA graph capture and lazy kernel setup. They are
+# reported separately and excluded from the per frame summary.
+WARMUP_FRAMES = 3
+
+# The three synchronized tracks. `session.wav` from the earlier 45 second test
+# is left in place.
+HUMAN_PATH = f"{VOLUME_PATH}/outputs/human.wav"
+MOSHI_PATH = f"{VOLUME_PATH}/outputs/moshi.wav"
+MIXED_PATH = f"{VOLUME_PATH}/outputs/mixed.wav"
 
 volume = modal.Volume.from_name("voice-inference-lab-hf-cache", create_if_missing=True)
 
@@ -133,6 +158,23 @@ def _json(report: dict) -> str:
     text = json.dumps(report, indent=2)
     print(text)
     return text
+
+
+def _write_wav(path: str, samples, sample_rate: int) -> None:
+    """Write one mono 16-bit WAV. ``samples`` is a 1-D torch tensor in [-1, 1]."""
+    import wave
+    from pathlib import Path
+
+    import torch
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    pcm = (samples.clamp(-1, 1) * 32767).to(torch.int16).numpy().tobytes()
+    with wave.open(str(target), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(pcm)
 
 
 @app.function(image=cache_image, volumes={VOLUME_PATH: volume}, timeout=3600, min_containers=0)
@@ -270,24 +312,35 @@ def load_model() -> str:
     min_containers=0,
 )
 def stream_session() -> str:
-    """PHASE 3 -- streams the fixture through the Moshi streaming path.
+    """PHASE 3 -- streams the fixture through Moshi as two synchronized tracks.
 
-    The loop below is the official streaming runtime, one frame at a time:
+    Moshi is not an input/output API. It runs two continuous streams at once:
+    human audio flows in, and model audio flows out, on the same clock. This
+    function preserves that. One loop drives one frame counter, so frame ``i``
+    holds the input chunk submitted at that point and the output frame produced
+    at that point.
+
+    Each frame does exactly three things, in the official order:
 
       1. ``mimi.encode`` turns 1920 input samples into 8 codebooks.
       2. ``lm_gen.step`` advances the Moshi language model by one frame.
       3. ``mimi.decode`` turns the model's 8 output codebooks back into audio.
 
-    Moshi emits no output for the first frame, because its output streams are
-    delayed relative to its inputs. Once the input clip ends we keep feeding
-    silence, so the model has room to speak.
+    The loop returns nothing on the first frame, because Moshi's output streams
+    are delayed against its inputs. After the clip ends we keep feeding silence
+    for ``TAIL_SECONDS``, so the model has room to speak.
 
-    Unlike Phase 2, this phase commits the Volume, because the generated audio
-    must outlive the container. It writes only under ``outputs/``.
+    Three files are written, all on one timeline and all the same length:
+
+      ``human.wav``  the input clip, in place, silence elsewhere
+      ``moshi.wav``  the decoded output, placed at ``OUTPUT_OFFSET_FRAMES``
+      ``mixed.wav``  the two tracks summed
+
+    Unlike Phase 2, this phase commits the Volume, because the audio must
+    outlive the container. It writes only under ``outputs/``.
     """
     import time
     import traceback
-    import wave
     from pathlib import Path
 
     import numpy as np
@@ -315,7 +368,9 @@ def stream_session() -> str:
             "total_gb": round(total / 1e9, 2),
         }
 
-    pieces = []
+    outputs = []
+    wav = None
+    track_samples = 0
     try:
         weights = _resolve_weights(loaders)
 
@@ -340,7 +395,13 @@ def stream_session() -> str:
             wav = wav[None]
         if wav.shape[0] > 1:
             wav = wav.mean(dim=0, keepdim=True)
+
+        # Take the fixed window before resampling, so the window is defined on
+        # the source timeline and does not shift if the resample changes.
+        begin = int(FIXTURE_START_SECONDS * source_rate)
+        wav = wav[:, begin : begin + int(FIXTURE_SECONDS * source_rate)]
         input_seconds = round(wav.shape[-1] / source_rate, 2)
+
         if source_rate != sample_rate:
             target = int(round(wav.shape[-1] * sample_rate / source_rate))
             wav = torch.nn.functional.interpolate(
@@ -356,10 +417,16 @@ def stream_session() -> str:
         tail_frames = int(round(TAIL_SECONDS * frame_rate))
         total_frames = len(clip) + tail_frames
 
+        # The tracks span the session plus the output offset, so no decoded
+        # frame is dropped and every file covers the same span of time.
+        track_frames = total_frames + OUTPUT_OFFSET_FRAMES
+        track_samples = track_frames * frame_size
+
         report["fixture"] = {
             "path": str(fixture),
             "source_sample_rate": source_rate,
             "resampled": source_rate != sample_rate,
+            "window_seconds": [FIXTURE_START_SECONDS, FIXTURE_START_SECONDS + FIXTURE_SECONDS],
             "input_seconds": input_seconds,
             "padded_samples": padding,
         }
@@ -369,11 +436,13 @@ def stream_session() -> str:
             "clip_frames": len(clip),
             "tail_frames": tail_frames,
             "total_frames": total_frames,
+            "track_frames": track_frames,
+            "output_offset_frames": OUTPUT_OFFSET_FRAMES,
         }
 
         torch.cuda.reset_peak_memory_stats()
         report["vram_before_session"] = vram()
-        minimum_free = None
+        session_min_free = None
 
         lm_gen = LMGen(moshi, temp=0.8, temp_text=0.7)
 
@@ -382,51 +451,62 @@ def stream_session() -> str:
             torch.cuda.synchronize()
             init_ms = (time.perf_counter() - init_start) * 1000
             start = time.perf_counter()
-
-            first_chunk_ms = first_output_ms = first_audio_ms = None
+            frame_start = start
+            per_frame_ms = []
             first_output_frame = None
+            first_model_output_ms = None
 
             for index in range(total_frames):
                 chunk = (clip[index] if index < len(clip) else silence).unsqueeze(0).cuda()
-
-                if first_chunk_ms is None:
-                    torch.cuda.synchronize()
-                    first_chunk_ms = (time.perf_counter() - start) * 1000
 
                 codes = mimi.encode(chunk)
                 tokens = lm_gen.step(codes)
 
                 if tokens is not None:
-                    torch.cuda.synchronize()
-                    if first_output_ms is None:
-                        first_output_ms = (time.perf_counter() - start) * 1000
+                    if first_output_frame is None:
                         first_output_frame = index
-                    decoded = mimi.decode(tokens[:, 1:])
-                    if first_audio_ms is None:
                         torch.cuda.synchronize()
-                        first_audio_ms = (time.perf_counter() - start) * 1000
-                    pieces.append(decoded[0].float().cpu())
+                        first_model_output_ms = (time.perf_counter() - start) * 1000
+                    decoded = mimi.decode(tokens[:, 1:])[0, 0]
+                    outputs.append((index, decoded.float().cpu()))
 
                 free, _ = torch.cuda.mem_get_info()
-                minimum_free = free if minimum_free is None else min(minimum_free, free)
+                session_min_free = free if session_min_free is None else min(session_min_free, free)
+
+                # Synchronising inside the loop is what makes a per frame number
+                # honest, and it serialises the CPU against the GPU. The cost is
+                # disclosed rather than hidden.
+                torch.cuda.synchronize()
+                now = time.perf_counter()
+                per_frame_ms.append((now - frame_start) * 1000)
+                frame_start = now
 
             torch.cuda.synchronize()
             total_ms = (time.perf_counter() - start) * 1000
 
+        warm = per_frame_ms[:WARMUP_FRAMES]
+        settled = per_frame_ms[WARMUP_FRAMES:]
         report["session"] = {
             "streaming_context_init_ms": round(init_ms),
-            "first_chunk_submitted_ms": round(first_chunk_ms) if first_chunk_ms else None,
-            "first_model_output_ms": round(first_output_ms) if first_output_ms else None,
+            "first_model_output_ms": round(first_model_output_ms) if first_model_output_ms else None,
             "first_output_at_frame": first_output_frame,
-            "first_decoded_audio_ms": round(first_audio_ms) if first_audio_ms else None,
             "total_ms": round(total_ms),
             "unpaced": True,
+        }
+        report["timing"] = {
+            "warmup_frames": len(warm),
+            "warmup_ms": [round(value) for value in warm],
+            "post_warmup_frames": len(settled),
+            "post_warmup_ms": [round(value) for value in settled],
+            "post_warmup_mean_ms": round(sum(settled) / len(settled), 1) if settled else None,
+            "post_warmup_median_ms": round(sorted(settled)[len(settled) // 2], 1) if settled else None,
+            "post_warmup_max_ms": round(max(settled), 1) if settled else None,
         }
         report["memory"] = {
             "vram_after_session": vram(),
             "peak_allocated_gb": round(torch.cuda.max_memory_allocated() / 1e9, 3),
             "peak_reserved_gb": round(torch.cuda.max_memory_reserved() / 1e9, 3),
-            "min_device_free_gb": round(minimum_free / 1e9, 2),
+            "min_device_free_gb": round(session_min_free / 1e9, 2),
         }
         report["oom"] = False
         report["completed"] = True
@@ -439,23 +519,35 @@ def stream_session() -> str:
         report["completed"] = False
         report["error"] = traceback.format_exc()
 
-    # Save whatever audio we produced, so a partial run is still inspectable.
-    if pieces:
-        generated = torch.cat(pieces, dim=-1).clamp(-1, 1)
-        out_path = Path(OUTPUT_PATH)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        pcm = (generated * 32767).to(torch.int16).numpy().tobytes()
-        with wave.open(str(out_path), "wb") as handle:
-            handle.setnchannels(1)
-            handle.setsampwidth(2)
-            handle.setframerate(sample_rate)
-            handle.writeframes(pcm)
+    # Build the three tracks. Each covers the whole session, so a given
+    # timestamp means the same moment in every file. A partial run stays
+    # inspectable.
+    if outputs and wav is not None and track_samples:
+        human = torch.zeros(track_samples)
+        human[: wav.shape[-1]] = wav[0]
+
+        moshi = torch.zeros(track_samples)
+        for index, decoded in outputs:
+            start_sample = (index + OUTPUT_OFFSET_FRAMES) * frame_size
+            moshi[start_sample : start_sample + decoded.shape[-1]] = decoded
+
+        mixed = (human + moshi) * MIX_SCALE
+
+        _write_wav(HUMAN_PATH, human, sample_rate)
+        _write_wav(MOSHI_PATH, moshi, sample_rate)
+        _write_wav(MIXED_PATH, mixed, sample_rate)
 
         # The audio must outlive the container, so this phase does commit.
         volume.commit()
         report["audio"] = {
-            "path": str(out_path),
-            "output_seconds": round(generated.shape[-1] / sample_rate, 2),
+            "human": HUMAN_PATH,
+            "moshi": MOSHI_PATH,
+            "mixed": MIXED_PATH,
+            "track_seconds": round(track_samples / sample_rate, 2),
+            "decoded_frames": len(outputs),
+            "output_seconds": round(len(outputs) * frame_size / sample_rate, 2),
+            "mix_scale": MIX_SCALE,
+            "mixed_peak": round(float(mixed.abs().max()), 3),
             "volume_committed": True,
         }
 
