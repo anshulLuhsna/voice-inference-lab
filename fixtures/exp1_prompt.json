@@ -1,0 +1,20 @@
+{
+  "source_text": "Give me three practical tips for sleeping better, one short sentence each.",
+  "model_repo": "hexgrad/Kokoro-82M",
+  "model_revision": "f3ff3571791e39611d31c381e3a41a3af07b4987",
+  "voice": "af_heart",
+  "speed": 1,
+  "generated_sample_rate": 24000,
+  "channels": 1,
+  "subtype": "PCM_16",
+  "duration_seconds": 4.775,
+  "samples": 114600,
+  "sha256": "3550ae22b252aad67b4f5d5238ecc5a46d36ceed74c9afd6e4d54799cd55b706",
+  "wav_path": "/cache/fixtures/exp1_prompt.wav",
+  "synthesis_ms": 7701,
+  "generation_device": "cpu",
+  "limitations": [
+    "Synthetic speech is cleaner than real microphone speech. Suitable for a controlled scheduling experiment; not an ASR quality benchmark. The live browser run provides the real-human-speech check.",
+    "Kokoro produced this input, but that does not make Kokoro part of the measured input path. Fixture preparation happens once, offline, and its latency is excluded from every reported turn."
+  ]
+}
