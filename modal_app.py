@@ -51,6 +51,21 @@ check_image = (
     modal.Image.debian_slim().uv_pip_install("torch", "numpy").add_local_python_source(SOURCE)
 )
 
+# The live browser session. Same pinned runtime as the offline phases, plus an
+# ASGI framework so Modal can serve a WebSocket, plus the page itself.
+# `load_image` is reused as the base rather than restated.
+#
+# The page lands at a fixed path. `moshi_browser.PAGE_PATH` must match it; a
+# mismatch fails loudly on the first request rather than quietly serving
+# nothing.
+PAGE_REMOTE = "/root/browser/index.html"
+
+live_image = (
+    load_image.uv_pip_install("fastapi")
+    .add_local_python_source(SOURCE, "moshi_browser")
+    .add_local_file("browser/index.html", PAGE_REMOTE)
+)
+
 
 @app.function(image=cache_image, volumes={exp.DATA_ROOT: volume}, timeout=3600, min_containers=0)
 def cache_weights() -> str:
@@ -89,3 +104,24 @@ def stream_session() -> str:
 def inspect_gpu() -> str:
     """Probe the GPU this platform hands out."""
     return exp.inspect_gpu()
+
+
+@app.function(
+    image=live_image,
+    gpu="A10G",
+    volumes={exp.DATA_ROOT: volume},
+    timeout=3600,
+    min_containers=0,
+)
+@modal.asgi_app()
+def browser():
+    """Live browser session: microphone in, model audio out, over one socket.
+
+    An open connection keeps this container alive and billing, silence
+    included. That is accepted and measured for this milestone rather than
+    papered over, because the cost of an idle session is one of the questions
+    the article asks.
+    """
+    import moshi_browser
+
+    return moshi_browser.create_app(commit=volume.commit)
