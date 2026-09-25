@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>voice-inference-lab</title>
+<style>
+  body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem auto; max-width: 62rem; padding: 0 1rem; }
+  button { font: inherit; padding: .5rem 1.1rem; cursor: pointer; }
+  #status { margin-left: .75rem; color: #555; }
+  #warn { color: #b00020; white-space: pre-wrap; }
+  #log { background: #111; color: #ddd; padding: 1rem; height: 22rem; overflow: auto; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>voice-inference-lab</h1>
+<p><button id="toggle">start</button><span id="status">idle</span></p>
+<p id="warn"></p>
+<div id="log"></div>
+
+<script>
+// 24 kHz mono, 1920 samples per frame. 1920 / 24000 = 80 ms, the model's native
+// frame. Matching it here means each frame we send maps 1:1 onto one
+// mimi.encode call on the server, so browser timings stay comparable to the
+// offline ones.
+const RATE = 24000;
+const FRAME = 1920;
+const KIND_PCM = 1;
+const KIND_JSON = 2;
+
+// Scheduling cushion before each playback buffer, in seconds. This is the only
+// latency we add deliberately, and it is here to avoid underruns. It is not
+// optimised; it is a visible constant.
+const CUSHION_S = 0.02;
+
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const warnEl = document.getElementById('warn');
+const toggleEl = document.getElementById('toggle');
+
+let ws = null, ctx = null, capture = null, stream = null, sink = null;
+let nextStart = 0, playbackReported = false, framesSent = 0, framesReceived = 0;
+
+function log(msg) {
+  logEl.textContent += `${(performance.now() / 1000).toFixed(3)}s  ${msg}\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function send(kind, payload) {
+  const msg = new Uint8Array(1 + payload.length);
+  msg[0] = kind;
+  msg.set(payload, 1);
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg);
+}
+
+// Inlined so the page stays a single file with no build step and no second
+// fetch. If the server's frame size ever differs, we say so rather than
+// silently sending the wrong amount of audio.
+const WORKLET_SRC = `
+class CaptureProcessor extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Float32Array(${FRAME}); this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    for (let i = 0; i < ch.length; i++) {
+      this.buf[this.n++] = ch[i];
+      if (this.n === ${FRAME}) { this.port.postMessage(this.buf.slice(0)); this.n = 0; }
+    }
+    return true;
+  }
+}
+registerProcessor('capture', CaptureProcessor);
+`;
+
+function play(buffer) {
+  const i16 = new Int16Array(buffer);
+  const audio = ctx.createBuffer(1, i16.length, RATE);
+  const channel = audio.getChannelData(0);
+  for (let i = 0; i < i16.length; i++) channel[i] = i16[i] / 32768;
+  const node = ctx.createBufferSource();
+  node.buffer = audio;
+  node.connect(ctx.destination);
+  const now = ctx.currentTime;
+  if (nextStart < now + CUSHION_S) nextStart = now + CUSHION_S;
+  node.start(nextStart);
+  nextStart += audio.duration;
+  if (!playbackReported) {
+    playbackReported = true;
+    log('playback started');
+    send(KIND_JSON, new TextEncoder().encode(
+      JSON.stringify({ event: 'playback_started', t: Math.round(performance.now()) })
+    ));
+  }
+}
+
+function startCapture(frameSize) {
+  if (frameSize !== FRAME) {
+    warnEl.textContent =
+      `server frame size is ${frameSize}, this page sends ${FRAME}. ` +
+      `Refusing to send mismatched audio.`;
+    log('WARNING frame size mismatch');
+    return;
+  }
+
+  capture = new AudioWorkletNode(ctx, 'capture');
+  capture.port.onmessage = (e) => {
+    const f32 = e.data;
+    const i16 = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+      const v = Math.max(-1, Math.min(1, f32[i]));
+      i16[i] = v < 0 ? v * 32768 : v * 32767;
+    }
+    send(KIND_PCM, new Uint8Array(i16.buffer));
+    if (++framesSent === 1) log('first mic frame sent');
+  };
+
+  // A worklet whose output reaches nothing is never pulled, so process() would
+  // never run. Route it through a muted gain into the destination to keep the
+  // graph alive, without playing the microphone back.
+  sink = ctx.createGain();
+  sink.gain.value = 0;
+  capture.connect(sink);
+  sink.connect(ctx.destination);
+
+  ctx.createMediaStreamSource(stream).connect(capture);
+  nextStart = 0;
+  playbackReported = false;
+  statusEl.textContent = 'live';
+  log('capture started');
+}
+
+async function start() {
+  warnEl.textContent = '';
+  ctx = new AudioContext({ sampleRate: RATE, latencyHint: 'interactive' });
+  if (ctx.sampleRate !== RATE) {
+    warnEl.textContent =
+      `browser opened the context at ${ctx.sampleRate} Hz, not ${RATE} Hz. ` +
+      `Not resampling silently; audio would be wrong.`;
+    log(`WARNING context rate ${ctx.sampleRate}`);
+  }
+  await ctx.resume();
+
+  const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'application/javascript' }));
+  await ctx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => log('websocket open');
+  ws.onclose = () => {
+    log('websocket closed');
+    statusEl.textContent = 'closed';
+    toggleEl.disabled = false;
+  };
+  ws.onerror = () => log('websocket error');
+
+  ws.onmessage = (ev) => {
+    const kind = new Uint8Array(ev.data, 0, 1)[0];
+    const body = ev.data.slice(1);   // ArrayBuffer slice, not a view
+    if (kind === KIND_JSON) {
+      const msg = JSON.parse(new TextDecoder().decode(body));
+      log(`server: ${JSON.stringify(msg)}`);
+      if (msg.event === 'handshake') startCapture(msg.frame_size);
+    } else if (kind === KIND_PCM) {
+      if (++framesReceived === 1) log('first model audio received');
+      play(body);
+    }
+  };
+}
+
+async function stop() {
+  if (capture) { capture.disconnect(); capture = null; }
+  if (sink) { sink.disconnect(); sink = null; }
+  if (ws) { ws.close(); ws = null; }
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  if (ctx) { await ctx.close(); ctx = null; }
+  statusEl.textContent = 'idle';
+  log('stopped');
+}
+
+toggleEl.onclick = async () => {
+  toggleEl.disabled = true;
+  try {
+    if (ws || ctx) { await stop(); } else { await start(); }
+  } catch (err) {
+    warnEl.textContent = String(err);
+    log(`ERROR ${err}`);
+  } finally {
+    toggleEl.disabled = false;
+  }
+};
+</script>
+</body>
+</html>
