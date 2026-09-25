@@ -14,5 +14,8 @@ infra/aws/crash.log
 infra/aws/terraform.tfvars
 infra/aws/*.auto.tfvars
 
+# Saved plan files. A plan can embed values, so it is never committed.
+infra/aws/tfplan*
+
 # Experiment artifacts copied off a host.
 artifacts/
