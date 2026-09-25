@@ -2,7 +2,7 @@
 
 Four functions, in the order you would run them:
 
-    modal run modal_app.py::inspect_gpu      # plumbing check
+    modal run modal_app.py::inspect_gpu      # plumbing check (earlier milestone)
     modal run modal_app.py::cache_weights    # PHASE 1 -- CPU only, no GPU
     modal run modal_app.py::load_model       # PHASE 2 -- runs on the A10
     modal run modal_app.py::stream_session   # PHASE 3 -- runs on the A10
@@ -32,7 +32,7 @@ MOSHI_REPO = "kyutai/moshiko-pytorch-bf16"
 MOSHI_REVISION = "2bfc9ae6e89079a5cc7ed2a68436010d91a3d289"  # 7.69B params, ~15.8 GB
 
 # The Moshi language model, the Mimi codec, and the text tokenizer all ship
-# inside MOSHI_REPO. Later phases read those filenames from moshi's own
+# inside MOSHI_REPO. Phase 2 and Phase 3 read those filenames from moshi's own
 # constants, so the pairing cannot drift.
 #
 # Caution: `kyutai/mimi` holds the Hugging Face `transformers` build of Mimi.
@@ -65,6 +65,12 @@ FIXTURE_SECONDS = 8.0
 # finishes we keep feeding silence, so the model has room to speak.
 TAIL_SECONDS = 5.0
 
+# Session length in frames. This milestone runs past Moshi's 3000 frame context
+# window to find out what happens at the wrap. The fixed clip is repeated to
+# fill the session, because content is irrelevant to a memory lifetime test;
+# only the frame clock matters.
+SUSTAINED_FRAMES = 3400  # 272 seconds, about 32 seconds past the window
+
 # Moshi declares a one frame delay on its outputs, and the first decoded frame
 # arrives on loop iteration 1. Each decoded frame is therefore placed on the
 # shared timeline at the iteration that produced it. Set this to 0 if the mix
@@ -88,11 +94,12 @@ EXPLICIT_WARMUP_FRAMES = 5
 # that failed to settle cannot hide inside an average.
 HEADLINE_FRAMES = 6
 
-# The three synchronized tracks. `session.wav` from the earlier 45 second test
-# is left in place.
-HUMAN_PATH = f"{VOLUME_PATH}/outputs/human.wav"
-MOSHI_PATH = f"{VOLUME_PATH}/outputs/moshi.wav"
-MIXED_PATH = f"{VOLUME_PATH}/outputs/mixed.wav"
+# This milestone sustains the session past the context window, so it writes under
+# its own prefix. The verified 13 second tracks in `outputs/` are left untouched.
+HUMAN_PATH = f"{VOLUME_PATH}/outputs/sustained/human.wav"
+MOSHI_PATH = f"{VOLUME_PATH}/outputs/sustained/moshi.wav"
+MIXED_PATH = f"{VOLUME_PATH}/outputs/sustained/mixed.wav"
+SERIES_PATH = f"{VOLUME_PATH}/outputs/sustained/series.csv"
 
 volume = modal.Volume.from_name("voice-inference-lab-hf-cache", create_if_missing=True)
 
@@ -418,14 +425,15 @@ def stream_session() -> str:
                 wav[None], size=target, mode="linear", align_corners=False
             )[0]
 
-        # Moshi requires whole frames. Pad the tail of the clip with silence.
+        # Moshi requires whole frames. Pad the end of the clip with silence.
         padding = (-wav.shape[-1]) % frame_size
         if padding:
             wav = torch.cat([wav, torch.zeros(1, padding)], dim=-1)
         clip = [wav[:, start : start + frame_size] for start in range(0, wav.shape[-1], frame_size)]
         silence = torch.zeros(1, frame_size)
         tail_frames = int(round(TAIL_SECONDS * frame_rate))
-        total_frames = len(clip) + tail_frames
+        total_frames = SUSTAINED_FRAMES
+        clip_frames = total_frames - tail_frames
 
         # The tracks span the session plus the output offset, so no decoded
         # frame is dropped and every file covers the same span of time.
@@ -443,7 +451,10 @@ def stream_session() -> str:
         report["frame"] = {
             "frame_size_samples": frame_size,
             "frame_rate_hz": frame_rate,
-            "clip_frames": len(clip),
+            "session_seconds": round(total_frames / frame_rate, 1),
+            "clip_seconds": input_seconds,
+            "clip_frames": clip_frames,
+            "clip_repeats": -(-clip_frames // len(clip)),
             "tail_frames": tail_frames,
             "total_frames": total_frames,
             "track_frames": track_frames,
@@ -496,14 +507,14 @@ def stream_session() -> str:
             # PHASE B -- the real fixture, on the already captured graphs.
             start = time.perf_counter()
             frame_start = start
-            real_frame_ms = []
+            series = []
             first_output_frame = None
             first_model_output_ms = None
 
             for index in range(total_frames):
-                chunk = (clip[index] if index < len(clip) else silence).unsqueeze(0).cuda()
+                source = clip[index % len(clip)] if index < clip_frames else silence
 
-                codes = mimi.encode(chunk)
+                codes = mimi.encode(source.unsqueeze(0).cuda())
                 tokens = lm_gen.step(codes)
 
                 if tokens is not None:
@@ -514,22 +525,74 @@ def stream_session() -> str:
                     decoded = mimi.decode(tokens[:, 1:])[0, 0]
                     outputs.append((index, decoded.float().cpu()))
 
-                free, _ = torch.cuda.mem_get_info()
-                session_min_free = free if session_min_free is None else min(session_min_free, free)
-
                 # Synchronising inside the loop is what makes a per frame number
                 # honest, and it serialises the CPU against the GPU. The cost is
                 # disclosed rather than hidden.
                 torch.cuda.synchronize()
                 now = time.perf_counter()
-                real_frame_ms.append((now - frame_start) * 1000)
-                frame_start = now
+                frame_ms = (now - frame_start) * 1000
+
+                # Memory is sampled after the timestamp is taken, so these three
+                # queries cannot inflate the per frame compute number. The clock
+                # restarts after the sampling for the same reason.
+                allocated = torch.cuda.memory_allocated()
+                reserved = torch.cuda.memory_reserved()
+                free, _ = torch.cuda.mem_get_info()
+                series.append((index, frame_ms, allocated / 1e9, reserved / 1e9, free / 1e9))
+                session_min_free = free if session_min_free is None else min(session_min_free, free)
+                frame_start = time.perf_counter()
 
             torch.cuda.synchronize()
             total_ms = (time.perf_counter() - start) * 1000
 
+        real_frame_ms = [row[1] for row in series]
         settled = real_frame_ms[HEADLINE_FRAMES:]
         frees = [value for value in (warmup_min_free, session_min_free) if value is not None]
+
+        # The full series goes to disk. The report keeps only the windows that
+        # answer the question, because 3400 rows do not belong in a console.
+        series_path = Path(SERIES_PATH)
+        series_path.parent.mkdir(parents=True, exist_ok=True)
+        with series_path.open("w") as handle:
+            handle.write("frame,ms,allocated_gb,reserved_gb,free_gb\n")
+            for row in series:
+                handle.write(f"{row[0]},{row[1]:.2f},{row[2]:.4f},{row[3]:.4f},{row[4]:.4f}\n")
+
+        # Read from the model rather than trusting a hardcoded 3000.
+        context_frames = moshi.context
+
+        def summarise(values):
+            if not values:
+                return None
+            ordered = sorted(values)
+            return {
+                "frames": len(values),
+                "mean_ms": round(sum(values) / len(values), 1),
+                "median_ms": round(ordered[len(ordered) // 2], 1),
+                "max_ms": round(max(values), 1),
+            }
+
+        def at(index):
+            row = series[min(max(index, 0), len(series) - 1)]
+            return {
+                "frame": row[0],
+                "ms": round(row[1], 1),
+                "allocated_gb": round(row[2], 3),
+                "reserved_gb": round(row[3], 3),
+                "free_gb": round(row[4], 2),
+            }
+
+        report["context"] = {
+            "context_frames": context_frames,
+            "context_seconds": round(context_frames / frame_rate, 1),
+            "session_frames": len(series),
+            "crosses_context": len(series) > context_frames,
+        }
+        report["series"] = {
+            "path": str(series_path),
+            "rows": len(series),
+            "columns": "frame,ms,allocated_gb,reserved_gb,free_gb",
+        }
         report["warmup"] = {
             "frames": len(warmup_ms_list),
             "total_ms": round(warmup_ms),
@@ -549,6 +612,17 @@ def stream_session() -> str:
             "total_ms": round(total_ms),
             "unpaced": True,
         }
+        report["latency"] = {
+            "startup_ms": [round(value, 1) for value in real_frame_ms[:8]],
+            "before_wrap": summarise(real_frame_ms[HEADLINE_FRAMES:context_frames]),
+            "after_wrap": summarise(real_frame_ms[context_frames + 1:]),
+            "last_10_before_wrap_ms": [
+                round(value, 1) for value in real_frame_ms[context_frames - 10 : context_frames]
+            ],
+            "first_10_after_wrap_ms": [
+                round(value, 1) for value in real_frame_ms[context_frames : context_frames + 10]
+            ],
+        }
         report["memory"] = {
             "vram_after_session": vram(),
             "peak_allocated_gb": round(torch.cuda.max_memory_allocated() / 1e9, 3),
@@ -557,6 +631,30 @@ def stream_session() -> str:
             "session_min_device_free_gb": (
                 round(session_min_free / 1e9, 2) if session_min_free else None
             ),
+        }
+        report["at_frames"] = {
+            str(index): at(index)
+            for index in sorted(
+                {
+                    0,
+                    1,
+                    2,
+                    50,
+                    100,
+                    context_frames - 1,
+                    context_frames,
+                    context_frames + 1,
+                    context_frames + 100,
+                    len(series) - 1,
+                }
+            )
+        }
+        report["growth"] = {
+            "frame_100_to_last": {
+                "allocated_gb": round(series[-1][2] - series[100][2], 4) if len(series) > 100 else None,
+                "reserved_gb": round(series[-1][3] - series[100][3], 4) if len(series) > 100 else None,
+                "free_gb": round(series[-1][4] - series[100][4], 4) if len(series) > 100 else None,
+            }
         }
         report["wall_clock_ms"] = round((time.perf_counter() - run_start) * 1000)
         report["oom"] = False
