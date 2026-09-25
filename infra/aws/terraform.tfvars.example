@@ -1,0 +1,37 @@
+# Copy this file to terraform.tfvars and fill it in.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# terraform.tfvars is git-ignored, along with Terraform state. Nothing in this
+# configuration holds a credential: authentication comes from the standard AWS
+# environment variables or from AWS_PROFILE, never from a file in this repo.
+
+region        = "ap-south-1"
+instance_type = "g5.2xlarge"
+
+# Required. The only address allowed to reach SSH. Use your own public address
+# with a /32. There is no default for this on purpose: nothing should be able to
+# open port 22 to the world by omission.
+ssh_ingress_cidr = "203.0.113.42/32"
+
+# Recommended. Paste the id reported by `terraform output resolved_ami_id` on
+# the first apply so every later apply uses the same image. Left empty,
+# Terraform looks up the newest image matching ami_name_filter, which drifts.
+ami_id = ""
+
+# Optional overrides.
+#
+# Pin an availability zone by supplying one of the default VPC's subnets:
+# subnet_id           = "subnet-0123456789abcdef0"
+#
+# ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+# ssh_user            = "ubuntu"
+# root_volume_size_gb = 100
+#
+# Leave empty to accept the default cap, which is the on-demand price.
+# spot_max_price      = ""
+
+tags = {
+  project = "voice-inference-lab"
+  purpose = "gpu-experiment-host"
+}

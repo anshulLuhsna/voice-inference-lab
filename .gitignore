@@ -4,3 +4,15 @@ venv/
 .venv/
 .env
 .commandcode/
+
+# Terraform. State can hold sensitive values, so it is never committed, and the
+# variable file is environment specific.
+infra/aws/.terraform/
+infra/aws/*.tfstate
+infra/aws/*.tfstate.*
+infra/aws/crash.log
+infra/aws/terraform.tfvars
+infra/aws/*.auto.tfvars
+
+# Experiment artifacts copied off a host.
+artifacts/
