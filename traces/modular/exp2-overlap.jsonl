@@ -1,0 +1,50 @@
+{
+  "trace_header": {
+    "session_id": "exp2-1790339654",
+    "experiment": 2,
+    "clock": "perf_counter_ns in one process, offset from turn_start",
+    "policy": "synthesis begins at each completed sentence rather than after the whole response; identical to Experiment 1 in every other respect",
+    "event_order": [
+      "turn_start",
+      "stt_start",
+      "stt_final",
+      "llm_request_start",
+      "llm_ttft",
+      "llm_sentence_ready",
+      "tts_clause_start",
+      "llm_sentence_ready",
+      "llm_sentence_ready",
+      "llm_done",
+      "tts_first_audio",
+      "tts_clause_done",
+      "first_audio_sent",
+      "tts_clause_start",
+      "tts_first_audio",
+      "tts_clause_done",
+      "tts_clause_start",
+      "tts_first_audio",
+      "tts_clause_done",
+      "turn_done"
+    ]
+  }
+}
+{"event": "turn_start", "stage": "turn", "t_ns": 168227508936, "t_ms": 168227.509, "meta": {"fixture_sha256": "3550ae22b252aad67b4f5d5238ecc5a46d36ceed74c9afd6e4d54799cd55b706"}}
+{"event": "stt_start", "stage": "stt", "t_ns": 168227522177, "t_ms": 168227.522, "meta": {}}
+{"event": "stt_final", "stage": "stt", "t_ns": 170107582744, "t_ms": 170107.583, "meta": {"transcript": "Give me three practical tips for sleeping better, one short sentence each.", "segments": 1, "audio_seconds": 4.775}}
+{"event": "llm_request_start", "stage": "llm", "t_ns": 170107589925, "t_ms": 170107.59, "meta": {"prompt_chars": 74}}
+{"event": "llm_ttft", "stage": "llm", "t_ns": 170214937932, "t_ms": 170214.938, "meta": {}}
+{"event": "llm_sentence_ready", "stage": "llm", "t_ns": 170335515837, "t_ms": 170335.516, "meta": {"clause_id": 0, "text": "Establish a regular sleep schedule and stick to it."}}
+{"event": "tts_clause_start", "stage": "tts", "t_ns": 170335592151, "t_ms": 170335.592, "meta": {"clause_id": 0, "text": "Establish a regular sleep schedule and stick to it."}}
+{"event": "llm_sentence_ready", "stage": "llm", "t_ns": 170488959486, "t_ms": 170488.959, "meta": {"clause_id": 1, "text": "Avoid screens for at least an hour before bed."}}
+{"event": "llm_sentence_ready", "stage": "llm", "t_ns": 170655167330, "t_ms": 170655.167, "meta": {"clause_id": 2, "text": "Create a relaxing bedtime routine to help you wind down."}}
+{"event": "llm_done", "stage": "llm", "t_ns": 170672925423, "t_ms": 170672.925, "meta": {}}
+{"event": "tts_first_audio", "stage": "tts", "t_ns": 173175160161, "t_ms": 173175.16, "meta": {"clause_id": 0}}
+{"event": "tts_clause_done", "stage": "tts", "t_ns": 173187113235, "t_ms": 173187.113, "meta": {"clause_id": 0, "seconds": 3.55}}
+{"event": "first_audio_sent", "stage": "tts", "t_ns": 173187120596, "t_ms": 173187.121, "meta": {"clause_id": 0}}
+{"event": "tts_clause_start", "stage": "tts", "t_ns": 173187154807, "t_ms": 173187.155, "meta": {"clause_id": 1, "text": "Avoid screens for at least an hour before bed."}}
+{"event": "tts_first_audio", "stage": "tts", "t_ns": 173322624194, "t_ms": 173322.624, "meta": {"clause_id": 1}}
+{"event": "tts_clause_done", "stage": "tts", "t_ns": 173332106305, "t_ms": 173332.106, "meta": {"clause_id": 1, "seconds": 3.15}}
+{"event": "tts_clause_start", "stage": "tts", "t_ns": 173332128857, "t_ms": 173332.129, "meta": {"clause_id": 2, "text": "Create a relaxing bedtime routine to help you wind down."}}
+{"event": "tts_first_audio", "stage": "tts", "t_ns": 173454128603, "t_ms": 173454.129, "meta": {"clause_id": 2}}
+{"event": "tts_clause_done", "stage": "tts", "t_ns": 173465429045, "t_ms": 173465.429, "meta": {"clause_id": 2, "seconds": 4.1}}
+{"event": "turn_done", "stage": "turn", "t_ns": 173488796757, "t_ms": 173488.797, "meta": {}}
