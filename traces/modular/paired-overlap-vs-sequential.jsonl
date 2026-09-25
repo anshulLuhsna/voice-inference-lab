@@ -1,0 +1,105 @@
+{
+  "trace_header": {
+    "session_id": "paired-1790342158",
+    "experiment": 3,
+    "clock": "perf_counter_ns. Each turn has its own clock, so a turn's events start at zero and every reported span is a difference inside that turn.",
+    "turn_order": [
+      "0:sequential",
+      "1:overlapped",
+      "2:sequential",
+      "3:overlapped",
+      "4:sequential",
+      "5:overlapped"
+    ]
+  }
+}
+{"turn": 0, "policy": "sequential", "event": "turn_start", "stage": "turn", "t_ns": 3605, "t_ms": 0.004, "meta": {"policy": "sequential", "fixture_sha256": "3550ae22b252aad67b4f5d5238ecc5a46d36ceed74c9afd6e4d54799cd55b706"}}
+{"turn": 0, "policy": "sequential", "event": "stt_start", "stage": "stt", "t_ns": 14406, "t_ms": 0.014, "meta": {}}
+{"turn": 0, "policy": "sequential", "event": "stt_final", "stage": "stt", "t_ns": 185038867, "t_ms": 185.039, "meta": {"transcript": "Give me three practical tips for sleeping better, one short sentence each.", "segments": 1, "audio_seconds": 4.775}}
+{"turn": 0, "policy": "sequential", "event": "llm_request_start", "stage": "llm", "t_ns": 185763910, "t_ms": 185.764, "meta": {"prompt_chars": 74}}
+{"turn": 0, "policy": "sequential", "event": "llm_ttft", "stage": "llm", "t_ns": 254107866, "t_ms": 254.108, "meta": {}}
+{"turn": 0, "policy": "sequential", "event": "llm_done", "stage": "llm", "t_ns": 725737933, "t_ms": 725.738, "meta": {"chars": 155, "chunks": 33}}
+{"turn": 0, "policy": "sequential", "event": "tts_start", "stage": "tts", "t_ns": 725750928, "t_ms": 725.751, "meta": {"chars": 155}}
+{"turn": 0, "policy": "sequential", "event": "tts_first_audio", "stage": "tts", "t_ns": 878327781, "t_ms": 878.328, "meta": {}}
+{"turn": 0, "policy": "sequential", "event": "tts_done", "stage": "tts", "t_ns": 878717407, "t_ms": 878.717, "meta": {"chunks": 1, "seconds": 10.375}}
+{"turn": 0, "policy": "sequential", "event": "turn_done", "stage": "turn", "t_ns": 879029136, "t_ms": 879.029, "meta": {}}
+{"turn": 1, "policy": "overlapped", "event": "turn_start", "stage": "turn", "t_ns": 3675, "t_ms": 0.004, "meta": {"policy": "overlapped", "fixture_sha256": "3550ae22b252aad67b4f5d5238ecc5a46d36ceed74c9afd6e4d54799cd55b706"}}
+{"turn": 1, "policy": "overlapped", "event": "stt_start", "stage": "stt", "t_ns": 18798, "t_ms": 0.019, "meta": {}}
+{"turn": 1, "policy": "overlapped", "event": "stt_final", "stage": "stt", "t_ns": 184496914, "t_ms": 184.497, "meta": {"transcript": "Give me three practical tips for sleeping better, one short sentence each.", "segments": 1, "audio_seconds": 4.775}}
+{"turn": 1, "policy": "overlapped", "event": "llm_request_start", "stage": "llm", "t_ns": 184552017, "t_ms": 184.552, "meta": {"prompt_chars": 74}}
+{"turn": 1, "policy": "overlapped", "event": "llm_ttft", "stage": "llm", "t_ns": 210381648, "t_ms": 210.382, "meta": {}}
+{"turn": 1, "policy": "overlapped", "event": "llm_sentence_ready", "stage": "llm", "t_ns": 347474545, "t_ms": 347.475, "meta": {"clause_id": 0, "text": "Establish a regular sleep schedule and stick to it."}}
+{"turn": 1, "policy": "overlapped", "event": "tts_clause_start", "stage": "tts", "t_ns": 347548758, "t_ms": 347.549, "meta": {"clause_id": 0, "text": "Establish a regular sleep schedule and stick to it."}}
+{"turn": 1, "policy": "overlapped", "event": "tts_first_audio", "stage": "tts", "t_ns": 510386959, "t_ms": 510.387, "meta": {"clause_id": 0}}
+{"turn": 1, "policy": "overlapped", "event": "tts_clause_done", "stage": "tts", "t_ns": 510552367, "t_ms": 510.552, "meta": {"clause_id": 0, "seconds": 3.55}}
+{"turn": 1, "policy": "overlapped", "event": "first_audio_sent", "stage": "tts", "t_ns": 510555709, "t_ms": 510.556, "meta": {"clause_id": 0}}
+{"turn": 1, "policy": "overlapped", "event": "llm_sentence_ready", "stage": "llm", "t_ns": 549693204, "t_ms": 549.693, "meta": {"clause_id": 1, "text": "Avoid screens for at least an hour before bed."}}
+{"turn": 1, "policy": "overlapped", "event": "tts_clause_start", "stage": "tts", "t_ns": 549794230, "t_ms": 549.794, "meta": {"clause_id": 1, "text": "Avoid screens for at least an hour before bed."}}
+{"turn": 1, "policy": "overlapped", "event": "tts_first_audio", "stage": "tts", "t_ns": 709851235, "t_ms": 709.851, "meta": {"clause_id": 1}}
+{"turn": 1, "policy": "overlapped", "event": "tts_clause_done", "stage": "tts", "t_ns": 710001717, "t_ms": 710.002, "meta": {"clause_id": 1, "seconds": 3.15}}
+{"turn": 1, "policy": "overlapped", "event": "llm_sentence_ready", "stage": "llm", "t_ns": 764093970, "t_ms": 764.094, "meta": {"clause_id": 2, "text": "Create a comfortable, dark, and quiet sleep environment."}}
+{"turn": 1, "policy": "overlapped", "event": "tts_clause_start", "stage": "tts", "t_ns": 764156083, "t_ms": 764.156, "meta": {"clause_id": 2, "text": "Create a comfortable, dark, and quiet sleep environment."}}
+{"turn": 1, "policy": "overlapped", "event": "llm_done", "stage": "llm", "t_ns": 782398460, "t_ms": 782.398, "meta": {}}
+{"turn": 1, "policy": "overlapped", "event": "tts_first_audio", "stage": "tts", "t_ns": 888182505, "t_ms": 888.183, "meta": {"clause_id": 2}}
+{"turn": 1, "policy": "overlapped", "event": "tts_clause_done", "stage": "tts", "t_ns": 888360567, "t_ms": 888.361, "meta": {"clause_id": 2, "seconds": 3.65}}
+{"turn": 1, "policy": "overlapped", "event": "turn_done", "stage": "turn", "t_ns": 890270884, "t_ms": 890.271, "meta": {}}
+{"turn": 2, "policy": "sequential", "event": "turn_start", "stage": "turn", "t_ns": 3218, "t_ms": 0.003, "meta": {"policy": "sequential", "fixture_sha256": "3550ae22b252aad67b4f5d5238ecc5a46d36ceed74c9afd6e4d54799cd55b706"}}
+{"turn": 2, "policy": "sequential", "event": "stt_start", "stage": "stt", "t_ns": 18592, "t_ms": 0.019, "meta": {}}
+{"turn": 2, "policy": "sequential", "event": "stt_final", "stage": "stt", "t_ns": 188102410, "t_ms": 188.102, "meta": {"transcript": "Give me three practical tips for sleeping better, one short sentence each.", "segments": 1, "audio_seconds": 4.775}}
+{"turn": 2, "policy": "sequential", "event": "llm_request_start", "stage": "llm", "t_ns": 188752683, "t_ms": 188.753, "meta": {"prompt_chars": 74}}
+{"turn": 2, "policy": "sequential", "event": "llm_ttft", "stage": "llm", "t_ns": 213425149, "t_ms": 213.425, "meta": {}}
+{"turn": 2, "policy": "sequential", "event": "llm_done", "stage": "llm", "t_ns": 685697225, "t_ms": 685.697, "meta": {"chars": 155, "chunks": 33}}
+{"turn": 2, "policy": "sequential", "event": "tts_start", "stage": "tts", "t_ns": 685710031, "t_ms": 685.71, "meta": {"chars": 155}}
+{"turn": 2, "policy": "sequential", "event": "tts_first_audio", "stage": "tts", "t_ns": 830587926, "t_ms": 830.588, "meta": {}}
+{"turn": 2, "policy": "sequential", "event": "tts_done", "stage": "tts", "t_ns": 830953442, "t_ms": 830.953, "meta": {"chunks": 1, "seconds": 10.075}}
+{"turn": 2, "policy": "sequential", "event": "turn_done", "stage": "turn", "t_ns": 831225493, "t_ms": 831.225, "meta": {}}
+{"turn": 3, "policy": "overlapped", "event": "turn_start", "stage": "turn", "t_ns": 2976, "t_ms": 0.003, "meta": {"policy": "overlapped", "fixture_sha256": "3550ae22b252aad67b4f5d5238ecc5a46d36ceed74c9afd6e4d54799cd55b706"}}
+{"turn": 3, "policy": "overlapped", "event": "stt_start", "stage": "stt", "t_ns": 18871, "t_ms": 0.019, "meta": {}}
+{"turn": 3, "policy": "overlapped", "event": "stt_final", "stage": "stt", "t_ns": 184933757, "t_ms": 184.934, "meta": {"transcript": "Give me three practical tips for sleeping better, one short sentence each.", "segments": 1, "audio_seconds": 4.775}}
+{"turn": 3, "policy": "overlapped", "event": "llm_request_start", "stage": "llm", "t_ns": 184985520, "t_ms": 184.986, "meta": {"prompt_chars": 74}}
+{"turn": 3, "policy": "overlapped", "event": "llm_ttft", "stage": "llm", "t_ns": 210613532, "t_ms": 210.614, "meta": {}}
+{"turn": 3, "policy": "overlapped", "event": "llm_sentence_ready", "stage": "llm", "t_ns": 347324208, "t_ms": 347.324, "meta": {"clause_id": 0, "text": "Establish a regular sleep schedule and stick to it."}}
+{"turn": 3, "policy": "overlapped", "event": "tts_clause_start", "stage": "tts", "t_ns": 347402782, "t_ms": 347.403, "meta": {"clause_id": 0, "text": "Establish a regular sleep schedule and stick to it."}}
+{"turn": 3, "policy": "overlapped", "event": "tts_first_audio", "stage": "tts", "t_ns": 477296544, "t_ms": 477.297, "meta": {"clause_id": 0}}
+{"turn": 3, "policy": "overlapped", "event": "tts_clause_done", "stage": "tts", "t_ns": 477448380, "t_ms": 477.448, "meta": {"clause_id": 0, "seconds": 3.55}}
+{"turn": 3, "policy": "overlapped", "event": "first_audio_sent", "stage": "tts", "t_ns": 477451145, "t_ms": 477.451, "meta": {"clause_id": 0}}
+{"turn": 3, "policy": "overlapped", "event": "llm_sentence_ready", "stage": "llm", "t_ns": 546757301, "t_ms": 546.757, "meta": {"clause_id": 1, "text": "Avoid screens for at least an hour before bed."}}
+{"turn": 3, "policy": "overlapped", "event": "tts_clause_start", "stage": "tts", "t_ns": 546829967, "t_ms": 546.83, "meta": {"clause_id": 1, "text": "Avoid screens for at least an hour before bed."}}
+{"turn": 3, "policy": "overlapped", "event": "tts_first_audio", "stage": "tts", "t_ns": 673923906, "t_ms": 673.924, "meta": {"clause_id": 1}}
+{"turn": 3, "policy": "overlapped", "event": "tts_clause_done", "stage": "tts", "t_ns": 674079670, "t_ms": 674.08, "meta": {"clause_id": 1, "seconds": 3.15}}
+{"turn": 3, "policy": "overlapped", "event": "llm_sentence_ready", "stage": "llm", "t_ns": 757856062, "t_ms": 757.856, "meta": {"clause_id": 2, "text": "Create a comfortable, dark, and quiet sleep environment."}}
+{"turn": 3, "policy": "overlapped", "event": "tts_clause_start", "stage": "tts", "t_ns": 757933429, "t_ms": 757.933, "meta": {"clause_id": 2, "text": "Create a comfortable, dark, and quiet sleep environment."}}
+{"turn": 3, "policy": "overlapped", "event": "llm_done", "stage": "llm", "t_ns": 774574185, "t_ms": 774.574, "meta": {}}
+{"turn": 3, "policy": "overlapped", "event": "tts_first_audio", "stage": "tts", "t_ns": 842966020, "t_ms": 842.966, "meta": {"clause_id": 2}}
+{"turn": 3, "policy": "overlapped", "event": "tts_clause_done", "stage": "tts", "t_ns": 843130700, "t_ms": 843.131, "meta": {"clause_id": 2, "seconds": 3.65}}
+{"turn": 3, "policy": "overlapped", "event": "turn_done", "stage": "turn", "t_ns": 843765342, "t_ms": 843.765, "meta": {}}
+{"turn": 4, "policy": "sequential", "event": "turn_start", "stage": "turn", "t_ns": 3262, "t_ms": 0.003, "meta": {"policy": "sequential", "fixture_sha256": "3550ae22b252aad67b4f5d5238ecc5a46d36ceed74c9afd6e4d54799cd55b706"}}
+{"turn": 4, "policy": "sequential", "event": "stt_start", "stage": "stt", "t_ns": 17806, "t_ms": 0.018, "meta": {}}
+{"turn": 4, "policy": "sequential", "event": "stt_final", "stage": "stt", "t_ns": 184499145, "t_ms": 184.499, "meta": {"transcript": "Give me three practical tips for sleeping better, one short sentence each.", "segments": 1, "audio_seconds": 4.775}}
+{"turn": 4, "policy": "sequential", "event": "llm_request_start", "stage": "llm", "t_ns": 185083940, "t_ms": 185.084, "meta": {"prompt_chars": 74}}
+{"turn": 4, "policy": "sequential", "event": "llm_ttft", "stage": "llm", "t_ns": 209979655, "t_ms": 209.98, "meta": {}}
+{"turn": 4, "policy": "sequential", "event": "llm_done", "stage": "llm", "t_ns": 682475961, "t_ms": 682.476, "meta": {"chars": 155, "chunks": 33}}
+{"turn": 4, "policy": "sequential", "event": "tts_start", "stage": "tts", "t_ns": 682488974, "t_ms": 682.489, "meta": {"chars": 155}}
+{"turn": 4, "policy": "sequential", "event": "tts_first_audio", "stage": "tts", "t_ns": 799887984, "t_ms": 799.888, "meta": {}}
+{"turn": 4, "policy": "sequential", "event": "tts_done", "stage": "tts", "t_ns": 800235554, "t_ms": 800.236, "meta": {"chunks": 1, "seconds": 10.075}}
+{"turn": 4, "policy": "sequential", "event": "turn_done", "stage": "turn", "t_ns": 800624016, "t_ms": 800.624, "meta": {}}
+{"turn": 5, "policy": "overlapped", "event": "turn_start", "stage": "turn", "t_ns": 4464, "t_ms": 0.004, "meta": {"policy": "overlapped", "fixture_sha256": "3550ae22b252aad67b4f5d5238ecc5a46d36ceed74c9afd6e4d54799cd55b706"}}
+{"turn": 5, "policy": "overlapped", "event": "stt_start", "stage": "stt", "t_ns": 17178, "t_ms": 0.017, "meta": {}}
+{"turn": 5, "policy": "overlapped", "event": "stt_final", "stage": "stt", "t_ns": 186873993, "t_ms": 186.874, "meta": {"transcript": "Give me three practical tips for sleeping better, one short sentence each.", "segments": 1, "audio_seconds": 4.775}}
+{"turn": 5, "policy": "overlapped", "event": "llm_request_start", "stage": "llm", "t_ns": 186920222, "t_ms": 186.92, "meta": {"prompt_chars": 74}}
+{"turn": 5, "policy": "overlapped", "event": "llm_ttft", "stage": "llm", "t_ns": 211921015, "t_ms": 211.921, "meta": {}}
+{"turn": 5, "policy": "overlapped", "event": "llm_sentence_ready", "stage": "llm", "t_ns": 348576640, "t_ms": 348.577, "meta": {"clause_id": 0, "text": "Establish a regular sleep schedule and stick to it."}}
+{"turn": 5, "policy": "overlapped", "event": "tts_clause_start", "stage": "tts", "t_ns": 348659264, "t_ms": 348.659, "meta": {"clause_id": 0, "text": "Establish a regular sleep schedule and stick to it."}}
+{"turn": 5, "policy": "overlapped", "event": "tts_first_audio", "stage": "tts", "t_ns": 478639561, "t_ms": 478.64, "meta": {"clause_id": 0}}
+{"turn": 5, "policy": "overlapped", "event": "tts_clause_done", "stage": "tts", "t_ns": 478814963, "t_ms": 478.815, "meta": {"clause_id": 0, "seconds": 3.55}}
+{"turn": 5, "policy": "overlapped", "event": "first_audio_sent", "stage": "tts", "t_ns": 478817601, "t_ms": 478.818, "meta": {"clause_id": 0}}
+{"turn": 5, "policy": "overlapped", "event": "llm_sentence_ready", "stage": "llm", "t_ns": 547128318, "t_ms": 547.128, "meta": {"clause_id": 1, "text": "Avoid screens for at least an hour before bed."}}
+{"turn": 5, "policy": "overlapped", "event": "tts_clause_start", "stage": "tts", "t_ns": 547195248, "t_ms": 547.195, "meta": {"clause_id": 1, "text": "Avoid screens for at least an hour before bed."}}
+{"turn": 5, "policy": "overlapped", "event": "tts_first_audio", "stage": "tts", "t_ns": 670732046, "t_ms": 670.732, "meta": {"clause_id": 1}}
+{"turn": 5, "policy": "overlapped", "event": "tts_clause_done", "stage": "tts", "t_ns": 670874690, "t_ms": 670.875, "meta": {"clause_id": 1, "seconds": 3.15}}
+{"turn": 5, "policy": "overlapped", "event": "llm_sentence_ready", "stage": "llm", "t_ns": 758354176, "t_ms": 758.354, "meta": {"clause_id": 2, "text": "Create a comfortable, dark, and quiet sleep environment."}}
+{"turn": 5, "policy": "overlapped", "event": "tts_clause_start", "stage": "tts", "t_ns": 758408328, "t_ms": 758.408, "meta": {"clause_id": 2, "text": "Create a comfortable, dark, and quiet sleep environment."}}
+{"turn": 5, "policy": "overlapped", "event": "llm_done", "stage": "llm", "t_ns": 777142377, "t_ms": 777.142, "meta": {}}
+{"turn": 5, "policy": "overlapped", "event": "tts_first_audio", "stage": "tts", "t_ns": 843721744, "t_ms": 843.722, "meta": {"clause_id": 2}}
+{"turn": 5, "policy": "overlapped", "event": "tts_clause_done", "stage": "tts", "t_ns": 843895722, "t_ms": 843.896, "meta": {"clause_id": 2, "seconds": 3.65}}
+{"turn": 5, "policy": "overlapped", "event": "turn_done", "stage": "turn", "t_ns": 844572159, "t_ms": 844.572, "meta": {}}

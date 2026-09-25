@@ -1685,6 +1685,310 @@ def _to_whisper_rate(path: str) -> tuple:
     }
 
 
+# ---------------------------------------------------------------------------
+# One implementation of each policy, shared by every operation that runs them.
+#
+# The two arms of the comparison must not be two copies of the same logic: a
+# change to one copy would silently make the experiment compare two different
+# pipelines. They live here, once, and the standalone operations and the paired
+# comparison all call the same code.
+# ---------------------------------------------------------------------------
+
+# Paid before any measured turn in the paired run. Its cost is large enough to
+# dominate a time-to-first-audio number.
+WARMUP_PHRASE = "Warming up the speech models."
+
+# How many sequential/overlapped pairs the paired run measures. The turns are a
+# few seconds each, so repetition costs little and gives a spread to judge
+# against the effect.
+PAIRED_PAIRS = 3
+
+PAIRED_DIR = f"{OUTPUT_DIR}/paired"
+
+
+def _stt_stage(whisper, emit) -> dict:
+    """Transcribe the fixture. Identical in both arms, deliberately."""
+    emit("stt_start", "stt")
+    samples, resample = _to_whisper_rate(FIXTURE_WAV)
+    segments, info = whisper.transcribe(samples, language="en", beam_size=5)
+    segment_list = [
+        {"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text}
+        for s in segments
+    ]
+    transcript = "".join(segment["text"] for segment in segment_list).strip()
+    emit(
+        "stt_final",
+        "stt",
+        transcript=transcript,
+        segments=len(segment_list),
+        audio_seconds=resample["source_seconds"],
+    )
+    return {
+        "transcript": transcript,
+        "segments": segment_list,
+        "resample": resample,
+        "language": {
+            "code": info.language,
+            "probability": round(info.language_probability, 4),
+        },
+    }
+
+
+def _turn_payload(transcript: str) -> dict:
+    """The request, built in one place so both arms send the same thing."""
+    return {
+        "model": VLLM_SERVED_NAME,
+        "messages": [
+            {"role": "system", "content": TURN_SYSTEM_PROMPT},
+            {"role": "user", "content": transcript},
+        ],
+        "max_tokens": TURN_MAX_OUTPUT_TOKENS,
+        "temperature": 0,
+        "stream": True,
+    }
+
+
+def _arm_sequential(kokoro, payload, emit) -> dict:
+    """Generate the whole reply, then synthesise it. Experiment 1's policy."""
+    import numpy as np
+
+    chunks = []
+    parts = []
+    with _PeakSampler() as sampler:
+        emit(
+            "llm_request_start",
+            "llm",
+            prompt_chars=len(payload["messages"][1]["content"]),
+        )
+        generation = _streaming_completion(
+            f"http://127.0.0.1:{VLLM_PORT}/v1/chat/completions",
+            payload,
+            on_first_token=lambda: emit("llm_ttft", "llm"),
+        )
+        if not generation.get("ok"):
+            raise RuntimeError(f"generation failed: {generation.get('error')}")
+        reply = generation["text"].strip()
+        emit("llm_done", "llm", chars=len(reply), chunks=generation["chunks"])
+
+        emit("tts_start", "tts", chars=len(reply))
+        for index, result in enumerate(kokoro(reply, voice=KOKORO_VOICE)):
+            if result.audio is None:
+                continue
+            if not chunks:
+                emit("tts_first_audio", "tts")
+            part = _audio_to_numpy(result.audio)
+            parts.append(part)
+            chunks.append(
+                {
+                    "index": index,
+                    "graphemes": result.graphemes,
+                    "samples": int(part.shape[0]),
+                    "seconds": round(part.shape[0] / KOKORO_SAMPLE_RATE, 3),
+                }
+            )
+        response = (
+            np.concatenate(parts) if parts else np.zeros(0, dtype="float32")
+        ).astype("float32")
+        emit(
+            "tts_done",
+            "tts",
+            chunks=len(chunks),
+            seconds=round(response.shape[0] / KOKORO_SAMPLE_RATE, 3),
+        )
+
+    return {
+        "reply": reply,
+        "generation": generation,
+        "tts_chunks": chunks,
+        "response": response,
+        "device_peak_bytes": sampler.peak_used_bytes,
+        "device_peak_samples": sampler.samples,
+    }
+
+
+def _arm_overlapped(kokoro, payload, emit, now_ms) -> dict:
+    """Synthesise each completed sentence while the model continues.
+
+    Experiment 2's policy. The stream is read on its own thread: if synthesis
+    ran on the reading thread, this process would stop reading while it
+    synthesised, tokens would pile up in the socket, and llm_done would report
+    when the consumer got round to them rather than when the model finished. The
+    overlap would look real while being an artifact of a slow reader.
+    """
+    import json
+    import queue
+    import threading
+    import urllib.request
+
+    import numpy as np
+
+    pending = queue.Queue()
+    reply_parts = []
+    token_timeline = []
+
+    def _reader() -> None:
+        buffer = ""
+        clause_id = 0
+        first_token = True
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{VLLM_PORT}/v1/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=300) as response:
+                for raw in response:
+                    line = raw.decode().strip()
+                    if not line.startswith("data:"):
+                        continue
+                    body = line[len("data:") :].strip()
+                    if body == "[DONE]":
+                        break
+                    chunk = json.loads(body)
+                    choices = chunk.get("choices") or []
+                    piece = (
+                        (choices[0].get("delta") or {}).get("content")
+                        if choices
+                        else None
+                    )
+                    if not piece:
+                        continue
+                    token_timeline.append({"t_ms": now_ms(), "chars": len(piece)})
+                    reply_parts.append(piece)
+                    if first_token:
+                        first_token = False
+                        emit("llm_ttft", "llm")
+                    buffer += piece
+                    completed, buffer = _split_sentences(buffer)
+                    for sentence in completed:
+                        emit(
+                            "llm_sentence_ready",
+                            "llm",
+                            clause_id=clause_id,
+                            text=sentence,
+                        )
+                        pending.put({"clause_id": clause_id, "text": sentence})
+                        clause_id += 1
+            if buffer.strip():
+                emit(
+                    "llm_sentence_ready",
+                    "llm",
+                    clause_id=clause_id,
+                    text=buffer.strip(),
+                )
+                pending.put({"clause_id": clause_id, "text": buffer.strip()})
+            emit("llm_done", "llm")
+        except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+            pending.put({"error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            pending.put({"end": True})
+
+    emit(
+        "llm_request_start",
+        "llm",
+        prompt_chars=len(payload["messages"][1]["content"]),
+    )
+    threading.Thread(target=_reader, daemon=True).start()
+
+    clauses = []
+    clause_audios = []
+    with _PeakSampler() as sampler:
+        while True:
+            try:
+                item = pending.get(timeout=600)
+            except queue.Empty:
+                raise RuntimeError("the generation stream stopped producing sentences")
+            if item.get("end"):
+                break
+            if "error" in item:
+                raise RuntimeError(f"generation stream failed: {item['error']}")
+
+            clause_id, text = item["clause_id"], item["text"]
+            emit("tts_clause_start", "tts", clause_id=clause_id, text=text)
+            parts = []
+            for result in kokoro(text, voice=KOKORO_VOICE):
+                if result.audio is None:
+                    continue
+                if not parts:
+                    emit("tts_first_audio", "tts", clause_id=clause_id)
+                parts.append(_audio_to_numpy(result.audio))
+
+            clause_audio = (
+                np.concatenate(parts) if parts else np.zeros(0, dtype="float32")
+            ).astype("float32")
+            clause_audios.append(clause_audio)
+            clauses.append(
+                {
+                    "clause_id": clause_id,
+                    "clause_text": text,
+                    "chars": len(text),
+                    "samples": int(clause_audio.shape[0]),
+                    "seconds": round(clause_audio.shape[0] / KOKORO_SAMPLE_RATE, 3),
+                }
+            )
+            emit(
+                "tts_clause_done",
+                "tts",
+                clause_id=clause_id,
+                seconds=clauses[-1]["seconds"],
+            )
+            # There is no downstream socket in this harness, so "sent" means the
+            # first clause's audio is complete and queued. Availability and
+            # handoff are the same instant here, and both are recorded rather
+            # than one being inferred from the other.
+            if clause_id == 0:
+                emit("first_audio_sent", "tts", clause_id=0)
+
+    response = (
+        np.concatenate(clause_audios) if clause_audios else np.zeros(0, dtype="float32")
+    ).astype("float32")
+    return {
+        "reply": "".join(reply_parts).strip(),
+        "clauses": clauses,
+        "clause_audios": clause_audios,
+        "response": response,
+        "token_timeline": token_timeline,
+        "device_peak_bytes": sampler.peak_used_bytes,
+        "device_peak_samples": sampler.samples,
+    }
+
+
+def _warm_up(whisper, kokoro) -> dict:
+    """Pay both models' first-call costs before any measured turn.
+
+    The first call through either model is far more expensive than later ones.
+    Kokoro compiles CUDA graphs and lazily initialises kernels; CTranslate2 does
+    the same for Whisper. Measured, that cost landed on the first synthesis of
+    the first turn, where it dominated the very number these experiments
+    compare -- a first clause costing 2,851 ms against 145 ms and 133 ms for the
+    identical work that followed.
+
+    Paying it once, here, is the same move the Moshi work made with its explicit
+    warm-up. It is outside every measured turn and reported separately.
+    """
+    import time
+
+    result = {"phrase": WARMUP_PHRASE, "note": "Outside every measured turn."}
+
+    started = time.perf_counter()
+    samples, _ = _to_whisper_rate(FIXTURE_WAV)
+    segments, _info = whisper.transcribe(samples, language="en", beam_size=5)
+    "".join(segment.text for segment in segments)
+    result["whisper_ms"] = round((time.perf_counter() - started) * 1000)
+
+    started = time.perf_counter()
+    for _ in kokoro(WARMUP_PHRASE, voice=KOKORO_VOICE):
+        pass
+    result["kokoro_ms"] = round((time.perf_counter() - started) * 1000)
+
+    print(
+        f"[paired] warm-up: whisper {result['whisper_ms']} ms,"
+        f" kokoro {result['kokoro_ms']} ms",
+        flush=True,
+    )
+    return result
+
+
 def sequential_turn(commit=_noop) -> str:
     """Experiment 1 -- the fully sequential baseline.
 
@@ -1811,87 +2115,23 @@ def sequential_turn(commit=_noop) -> str:
 
         emit("turn_start", "turn", fixture_sha256=observed_sha)
 
-        # --- 1. speech to text -------------------------------------------
-        emit("stt_start", "stt")
-        samples, resample = _to_whisper_rate(FIXTURE_WAV)
-        summary["resample"] = resample
-        segments, info = whisper.transcribe(samples, language="en", beam_size=5)
-        segment_list = [
-            {"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text}
-            for s in segments
-        ]
-        transcript = "".join(segment["text"] for segment in segment_list).strip()
-        summary["transcript"] = transcript
-        summary["transcript_segments"] = segment_list
-        summary["whisper_language"] = {
-            "code": info.language,
-            "probability": round(info.language_probability, 4),
-        }
-        emit(
-            "stt_final",
-            "stt",
-            transcript=transcript,
-            segments=len(segment_list),
-            audio_seconds=resample["source_seconds"],
-        )
+        stage = _stt_stage(whisper, emit)
+        summary["transcript"] = stage["transcript"]
+        summary["transcript_segments"] = stage["segments"]
+        summary["whisper_language"] = stage["language"]
+        summary["resample"] = stage["resample"]
 
-        # --- 2. the language model ---------------------------------------
-        emit("llm_request_start", "llm", prompt_chars=len(transcript))
-        generation = _streaming_completion(
-            f"http://127.0.0.1:{VLLM_PORT}/v1/chat/completions",
-            {
-                "model": VLLM_SERVED_NAME,
-                "messages": [
-                    {"role": "system", "content": TURN_SYSTEM_PROMPT},
-                    {"role": "user", "content": transcript},
-                ],
-                "max_tokens": TURN_MAX_OUTPUT_TOKENS,
-                "temperature": 0,
-                "stream": True,
-            },
-            on_first_token=lambda: emit("llm_ttft", "llm"),
-        )
-        if not generation.get("ok"):
-            raise RuntimeError(f"generation failed: {generation.get('error')}")
-        reply = generation["text"].strip()
-        summary["reply"] = reply
-        summary["generation"] = generation
-        emit("llm_done", "llm", chars=len(reply), chunks=generation["chunks"])
+        arm = _arm_sequential(kokoro, _turn_payload(stage["transcript"]), emit)
+        summary["reply"] = arm["reply"]
+        summary["generation"] = arm["generation"]
+        summary["tts_chunks"] = arm["tts_chunks"]
+        summary["device_peak_gb"] = round(arm["device_peak_bytes"] / 1e9, 3)
 
-        # --- 3. the whole reply, synthesised as one unit ------------------
-        emit("tts_start", "tts", chars=len(reply))
-        tts_chunks = []
-        audio_parts = []
-        for index, result in enumerate(kokoro(reply, voice=KOKORO_VOICE)):
-            if result.audio is None:
-                continue
-            if not tts_chunks:
-                emit("tts_first_audio", "tts")
-            part = _audio_to_numpy(result.audio)
-            audio_parts.append(part)
-            tts_chunks.append(
-                {
-                    "index": index,
-                    "graphemes": result.graphemes,
-                    "samples": int(part.shape[0]),
-                    "seconds": round(part.shape[0] / KOKORO_SAMPLE_RATE, 3),
-                }
-            )
-
-        response = (
-            np.concatenate(audio_parts) if audio_parts else np.zeros(0, dtype="float32")
-        ).astype("float32")
+        response = arm["response"]
         response_wav = str(Path(EXP1_DIR, "response.wav"))
         sf.write(response_wav, response, KOKORO_SAMPLE_RATE, subtype="PCM_16")
-        summary["tts_chunks"] = tts_chunks
         summary["response_wav"] = response_wav
         summary["response_seconds"] = round(response.shape[0] / KOKORO_SAMPLE_RATE, 3)
-        emit(
-            "tts_done",
-            "tts",
-            chunks=len(tts_chunks),
-            seconds=summary["response_seconds"],
-        )
 
         emit("turn_done", "turn")
     finally:
@@ -1982,11 +2222,8 @@ def overlap_turn(commit=_noop) -> str:
     reads, the other synthesises, and the trace can tell the difference.
     """
     import json
-    import queue
-    import threading
     import time
     import traceback
-    import urllib.request
     from pathlib import Path
 
     import numpy as np
@@ -1999,8 +2236,6 @@ def overlap_turn(commit=_noop) -> str:
     clock = time.perf_counter_ns
     started_ns = clock()
     events = []
-    token_timeline = []
-    reply_parts = []
 
     def emit(name: str, stage: str, **meta) -> None:
         offset = clock() - started_ns
@@ -2071,7 +2306,6 @@ def overlap_turn(commit=_noop) -> str:
             f"with Experiment 1, so this stops instead of continuing quietly."
         )
 
-    pending = queue.Queue()
     process, logs = None, []
     try:
         record, whisper = _run_stage(
@@ -2100,184 +2334,37 @@ def overlap_turn(commit=_noop) -> str:
         if not ready:
             raise RuntimeError(f"vLLM did not start: {reason}")
 
-        payload = {
-            "model": VLLM_SERVED_NAME,
-            "messages": [
-                {"role": "system", "content": TURN_SYSTEM_PROMPT},
-                {"role": "user", "content": None},  # filled in after transcription
-            ],
-            "max_tokens": TURN_MAX_OUTPUT_TOKENS,
-            "temperature": 0,
-            "stream": True,
-        }
-
-        def _reader() -> None:
-            """Read the token stream on its own thread and cut it into sentences.
-
-            Times are stamped here, when a token actually arrives, rather than
-            when the synthesising thread gets round to it. That is what makes the
-            overlap measurable instead of assumed.
-            """
-            buffer = ""
-            clause_id = 0
-            first_token = True
-            request = urllib.request.Request(
-                f"http://127.0.0.1:{VLLM_PORT}/v1/chat/completions",
-                data=json.dumps(payload).encode(),
-                headers={"Content-Type": "application/json"},
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=300) as response:
-                    for raw in response:
-                        line = raw.decode().strip()
-                        if not line.startswith("data:"):
-                            continue
-                        body = line[len("data:") :].strip()
-                        if body == "[DONE]":
-                            break
-                        chunk = json.loads(body)
-                        choices = chunk.get("choices") or []
-                        piece = (
-                            (choices[0].get("delta") or {}).get("content")
-                            if choices
-                            else None
-                        )
-                        if not piece:
-                            continue
-                        token_timeline.append(
-                            {
-                                "t_ms": round((clock() - started_ns) / 1e6, 3),
-                                "chars": len(piece),
-                            }
-                        )
-                        reply_parts.append(piece)
-                        if first_token:
-                            first_token = False
-                            emit("llm_ttft", "llm")
-                        buffer += piece
-                        completed, buffer = _split_sentences(buffer)
-                        for sentence in completed:
-                            emit(
-                                "llm_sentence_ready",
-                                "llm",
-                                clause_id=clause_id,
-                                text=sentence,
-                            )
-                            pending.put({"clause_id": clause_id, "text": sentence})
-                            clause_id += 1
-                if buffer.strip():
-                    emit(
-                        "llm_sentence_ready",
-                        "llm",
-                        clause_id=clause_id,
-                        text=buffer.strip(),
-                    )
-                    pending.put({"clause_id": clause_id, "text": buffer.strip()})
-                emit("llm_done", "llm")
-            except Exception as exc:  # noqa: BLE001 - reported, not swallowed
-                pending.put({"error": f"{type(exc).__name__}: {exc}"})
-            finally:
-                pending.put({"end": True})
-
         emit("turn_start", "turn", fixture_sha256=observed_sha)
 
-        # --- 1. speech to text -------------------------------------------
-        emit("stt_start", "stt")
-        samples, resample = _to_whisper_rate(FIXTURE_WAV)
-        summary["resample"] = resample
-        segments, info = whisper.transcribe(samples, language="en", beam_size=5)
-        segment_list = [
-            {"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text}
-            for s in segments
-        ]
-        transcript = "".join(segment["text"] for segment in segment_list).strip()
-        summary["transcript"] = transcript
-        summary["transcript_segments"] = segment_list
-        summary["whisper_language"] = {
-            "code": info.language,
-            "probability": round(info.language_probability, 4),
-        }
-        emit(
-            "stt_final",
-            "stt",
-            transcript=transcript,
-            segments=len(segment_list),
-            audio_seconds=resample["source_seconds"],
+        stage = _stt_stage(whisper, emit)
+        summary["transcript"] = stage["transcript"]
+        summary["transcript_segments"] = stage["segments"]
+        summary["whisper_language"] = stage["language"]
+        summary["resample"] = stage["resample"]
+
+        arm = _arm_overlapped(
+            kokoro,
+            _turn_payload(stage["transcript"]),
+            emit,
+            lambda: round((clock() - started_ns) / 1e6, 3),
         )
-
-        # --- 2 and 3. generation and synthesis, running together ----------
-        payload["messages"][1]["content"] = transcript
-        emit("llm_request_start", "llm", prompt_chars=len(transcript))
-        threading.Thread(target=_reader, daemon=True).start()
-
-        clauses = []
-        audio_parts = []
-        with _PeakSampler() as sampler:
-            while True:
-                try:
-                    item = pending.get(timeout=600)
-                except queue.Empty:
-                    raise RuntimeError(
-                        "the generation stream stopped producing sentences"
-                    )
-                if item.get("end"):
-                    break
-                if "error" in item:
-                    raise RuntimeError(f"generation stream failed: {item['error']}")
-
-                clause_id, text = item["clause_id"], item["text"]
-                emit("tts_clause_start", "tts", clause_id=clause_id, text=text)
-                parts = []
-                for result in kokoro(text, voice=KOKORO_VOICE):
-                    if result.audio is None:
-                        continue
-                    if not parts:
-                        emit("tts_first_audio", "tts", clause_id=clause_id)
-                    parts.append(_audio_to_numpy(result.audio))
-
-                clause_audio = (
-                    np.concatenate(parts) if parts else np.zeros(0, dtype="float32")
-                ).astype("float32")
-                clause_wav = str(Path(EXP2_DIR, f"clause-{clause_id:03d}.wav"))
-                sf.write(clause_wav, clause_audio, KOKORO_SAMPLE_RATE, subtype="PCM_16")
-                audio_parts.append(clause_audio)
-                clauses.append(
-                    {
-                        "clause_id": clause_id,
-                        "clause_text": text,
-                        "chars": len(text),
-                        "samples": int(clause_audio.shape[0]),
-                        "seconds": round(clause_audio.shape[0] / KOKORO_SAMPLE_RATE, 3),
-                        "wav": clause_wav,
-                    }
-                )
-                emit(
-                    "tts_clause_done",
-                    "tts",
-                    clause_id=clause_id,
-                    seconds=clauses[-1]["seconds"],
-                )
-                # There is no downstream socket in this harness, so "sent" means
-                # the first clause's audio is complete and queued for playback.
-                # Availability and handoff are therefore the same instant here,
-                # and both are recorded rather than one being inferred.
-                if clause_id == 0:
-                    emit("first_audio_sent", "tts", clause_id=0)
-
-        # Assembled here rather than reconstructed from the clause texts, so it
-        # is exactly what the model emitted. The first run of this experiment
-        # never recorded it, which made the round-trip comparison meaningless:
-        # it was comparing a good transcript against an empty string.
-        summary["reply"] = "".join(reply_parts).strip()
-        summary["device_peak_gb"] = round(sampler.peak_used_bytes / 1e9, 3)
-        summary["device_peak_samples"] = sampler.samples
-
-        response = (
-            np.concatenate(audio_parts) if audio_parts else np.zeros(0, dtype="float32")
-        ).astype("float32")
+        clauses = arm["clauses"]
+        response = arm["response"]
         response_wav = str(Path(EXP2_DIR, "response.wav"))
         sf.write(response_wav, response, KOKORO_SAMPLE_RATE, subtype="PCM_16")
+        for clause, clause_audio in zip(clauses, arm["clause_audios"]):
+            sf.write(
+                str(Path(EXP2_DIR, f"clause-{clause['clause_id']:03d}.wav")),
+                clause_audio,
+                KOKORO_SAMPLE_RATE,
+                subtype="PCM_16",
+            )
+
+        summary["reply"] = arm["reply"]
         summary["clauses"] = clauses
+        summary["token_timeline"] = arm["token_timeline"]
+        summary["device_peak_gb"] = round(arm["device_peak_bytes"] / 1e9, 3)
+        summary["device_peak_samples"] = arm["device_peak_samples"]
         summary["response_wav"] = response_wav
         summary["response_seconds"] = round(response.shape[0] / KOKORO_SAMPLE_RATE, 3)
         summary["clause_seconds_sum"] = round(
@@ -2379,7 +2466,6 @@ def overlap_turn(commit=_noop) -> str:
         "unrelated to the spans beside them."
     )
 
-    summary["token_timeline"] = token_timeline
     summary["events"] = events
 
     # --- the comparison, read from Experiment 1's own trace ---------------
@@ -2441,7 +2527,10 @@ def overlap_turn(commit=_noop) -> str:
     summary["artifacts"] = {
         "input_wav": str(Path(EXP2_DIR, "input.wav")),
         "response_wav": response_wav,
-        "clause_wavs": [clause["wav"] for clause in summary.get("clauses", [])],
+        "clause_wavs": [
+            str(Path(EXP2_DIR, f"clause-{clause['clause_id']:03d}.wav"))
+            for clause in summary.get("clauses", [])
+        ],
         "trace_jsonl": str(trace_path),
         "vllm_log": str(Path(EXP2_DIR, "vllm_startup.log")),
     }
@@ -2457,5 +2546,337 @@ def overlap_turn(commit=_noop) -> str:
             f" | {summary['roundtrip']['transcript']!r}",
             flush=True,
         )
+    commit()
+    return _json(summary)
+
+
+def _spread(values: list) -> dict:
+    """Min, max and their ratio, so comparability can be judged at a glance."""
+    clean = [value for value in values if value is not None]
+    if not clean:
+        return {"count": 0}
+    return {
+        "count": len(clean),
+        "min_ms": round(min(clean), 3),
+        "max_ms": round(max(clean), 3),
+        "max_over_min": round(max(clean) / min(clean), 3) if min(clean) else None,
+    }
+
+
+def paired_turns(commit=_noop) -> str:
+    """Both policies in one container, alternating, for a valid comparison.
+
+    The first two experiments ran in separate containers, and the difference
+    between those containers -- visible on work the scheduling policy cannot
+    touch, such as transcription time -- was larger than the effect being
+    measured. Here the models are loaded once, both models' first-call costs are
+    paid before any measured turn, and the two policies alternate in one
+    session. The policy is then the only thing that differs between the arms.
+
+    Each turn gets its own clock, so every turn's events start at zero. The
+    report carries the per-turn numbers, the per-pair deltas, and the spread of
+    the policy-independent metrics -- which is what says whether the comparison
+    is worth reading at all.
+    """
+    import json
+    import time
+    import traceback
+    from pathlib import Path
+
+    import numpy as np
+    import soundfile as sf
+    from faster_whisper import WhisperModel
+    from kokoro import KPipeline
+
+    Path(PAIRED_DIR).mkdir(parents=True, exist_ok=True)
+
+    summary = {
+        "operation": "paired_turns",
+        "experiment": 3,
+        "ok": True,
+        "session_id": f"paired-{int(time.time())}",
+        "question": "does letting synthesis begin at each sentence move time to first audio?",
+        "policy_under_test": "when synthesis is allowed to begin",
+        "clock": (
+            "perf_counter_ns. Each turn has its own clock, so a turn's events start at "
+            "zero and every reported span is a difference inside that turn."
+        ),
+        "pairs_per_policy": PAIRED_PAIRS,
+        "warmup_note": (
+            "Model loading and both first-call costs are paid before any measured turn "
+            "and reported separately, because Kokoro's first synthesis otherwise "
+            "dominates time to first audio."
+        ),
+        "environment": _gpu_query(),
+        "packages": _package_versions(),
+        "config": {
+            "fixture_wav": FIXTURE_WAV,
+            "fixture_text": FIXTURE_TEXT,
+            "whisper_dir": WHISPER_DIR,
+            "whisper_compute_type": WHISPER_COMPUTE_TYPE,
+            "whisper_input_rate": WHISPER_SAMPLE_RATE,
+            "qwen_repo": QWEN_REPO,
+            "qwen_revision": QWEN_REVISION,
+            "qwen_served_name": VLLM_SERVED_NAME,
+            "qwen_max_model_len": VLLM_MAX_MODEL_LEN,
+            "qwen_max_output_tokens": TURN_MAX_OUTPUT_TOKENS,
+            "qwen_temperature": 0,
+            "qwen_system_prompt": TURN_SYSTEM_PROMPT,
+            "gpu_memory_utilization": VLLM_UTILIZATION,
+            "env_overrides": VLLM_ENV_OVERRIDES,
+            "kokoro_repo": KOKORO_REPO,
+            "kokoro_revision": KOKORO_REVISION,
+            "kokoro_voice": KOKORO_VOICE,
+            "kokoro_sample_rate": KOKORO_SAMPLE_RATE,
+            "sentence_rule": SENTENCE_END.pattern,
+            "vllm_command": _vllm_command(VLLM_UTILIZATION),
+        },
+    }
+
+    _require(FIXTURE_WAV, "The Experiment 1 fixture")
+    _require(QWEN_DIR, "The Qwen weights")
+
+    manifest = json.loads(Path(FIXTURE_MANIFEST).read_text())
+    observed_sha = _sha256_file(FIXTURE_WAV)
+    summary["fixture"] = {
+        **manifest,
+        "observed_sha256": observed_sha,
+        "matches_manifest": observed_sha == manifest["sha256"],
+    }
+    if observed_sha != manifest["sha256"]:
+        raise RuntimeError(
+            f"fixture sha256 {observed_sha} does not match the manifest "
+            f"{manifest['sha256']}. A changed fixture invalidates the comparison, so "
+            f"this stops instead of continuing quietly."
+        )
+
+    def _run_turn(policy: str, index: int, whisper, kokoro) -> dict:
+        """One measured turn on its own clock, using the shared arm."""
+        turn_start_ns = time.perf_counter_ns()
+        events = []
+
+        def emit(name: str, stage: str, **meta) -> None:
+            offset = time.perf_counter_ns() - turn_start_ns
+            events.append(
+                {
+                    "event": name,
+                    "stage": stage,
+                    "t_ns": offset,
+                    "t_ms": round(offset / 1e6, 3),
+                    "meta": meta,
+                }
+            )
+
+        def now_ms() -> float:
+            return round((time.perf_counter_ns() - turn_start_ns) / 1e6, 3)
+
+        emit("turn_start", "turn", policy=policy, fixture_sha256=observed_sha)
+        stage = _stt_stage(whisper, emit)
+        payload = _turn_payload(stage["transcript"])
+        arm = (
+            _arm_sequential(kokoro, payload, emit)
+            if policy == "sequential"
+            else _arm_overlapped(kokoro, payload, emit, now_ms)
+        )
+        emit("turn_done", "turn")
+
+        offsets = _first_offsets(events)
+        return {
+            "policy": policy,
+            "turn_index": index,
+            "transcript": stage["transcript"],
+            "reply": arm["reply"],
+            "response_seconds": round(
+                arm["response"].shape[0] / KOKORO_SAMPLE_RATE, 3
+            ),
+            "device_peak_gb": round(arm["device_peak_bytes"] / 1e9, 3),
+            "device_peak_samples": arm["device_peak_samples"],
+            "timings_ms": {
+                "stt": _span(offsets, "stt_start", "stt_final"),
+                "llm_ttft": _span(offsets, "llm_request_start", "llm_ttft"),
+                "llm_total": _span(offsets, "llm_request_start", "llm_done"),
+                "time_to_first_audio": _span(offsets, "turn_start", "tts_first_audio"),
+                "first_audio_sent": _span(offsets, "turn_start", "first_audio_sent"),
+                "end_to_end": _span(offsets, "turn_start", "turn_done"),
+            },
+            "events": events,
+            "audio": arm["response"],
+        }
+
+    process, logs = None, []
+    turns = []
+    try:
+        record, whisper = _run_stage(
+            "whisper_load",
+            lambda: WhisperModel(
+                WHISPER_DIR, device="cuda", compute_type=WHISPER_COMPUTE_TYPE
+            ),
+        )
+        summary["whisper_load"] = record
+
+        record, kokoro = _run_stage(
+            "kokoro_load",
+            lambda: KPipeline(
+                lang_code=KOKORO_LANG_CODE, repo_id=KOKORO_REPO, device="cuda"
+            ),
+        )
+        summary["kokoro_load"] = record
+
+        process, logs = _spawn_vllm(VLLM_UTILIZATION)
+        ready, reason = _http_ready(
+            f"http://127.0.0.1:{VLLM_PORT}/v1/models",
+            VLLM_READY_TIMEOUT_SECONDS,
+            process,
+        )
+        summary["vllm"] = {"started": ready, "outcome": reason}
+        if not ready:
+            raise RuntimeError(f"vLLM did not start: {reason}")
+
+        summary["warmup"] = _warm_up(whisper, kokoro)
+
+        for pair_index in range(PAIRED_PAIRS):
+            for policy in ("sequential", "overlapped"):
+                result = _run_turn(policy, len(turns), whisper, kokoro)
+                audio = result.pop("audio")
+                wav = str(
+                    Path(PAIRED_DIR, f"turn-{result['turn_index']:02d}-{policy}.wav")
+                )
+                sf.write(wav, audio, KOKORO_SAMPLE_RATE, subtype="PCM_16")
+                result["wav"] = wav
+                turns.append(result)
+                print(
+                    f"[paired] turn {result['turn_index']} {policy}:"
+                    f" {json.dumps(result['timings_ms'])}",
+                    flush=True,
+                )
+                summary["turns"] = turns
+                summary["written_to"] = _write_report(summary, "paired/paired.json")
+                commit()
+    except Exception:  # noqa: BLE001 - reported, not swallowed
+        summary["ok"] = False
+        summary["error"] = traceback.format_exc()
+    finally:
+        summary["vllm_exit"] = _stop_vllm(process)
+        if logs:
+            Path(PAIRED_DIR, "vllm_startup.log").write_text("\n".join(logs) + "\n")
+
+    # --- the comparison ---------------------------------------------------
+    def median(values):
+        ordered = sorted(value for value in values if value is not None)
+        if not ordered:
+            return None
+        mid = len(ordered) // 2
+        if len(ordered) % 2:
+            return round(ordered[mid], 3)
+        return round((ordered[mid - 1] + ordered[mid]) / 2, 3)
+
+    by_policy = {
+        policy: [turn for turn in turns if turn["policy"] == policy]
+        for policy in ("sequential", "overlapped")
+    }
+    summary["medians_ms"] = {
+        policy: {
+            key: median([turn["timings_ms"][key] for turn in group])
+            for key in (
+                "stt",
+                "llm_ttft",
+                "llm_total",
+                "time_to_first_audio",
+                "end_to_end",
+            )
+        }
+        for policy, group in by_policy.items()
+    }
+
+    pairs = []
+    for pair_index in range(PAIRED_PAIRS):
+        group = [
+            turn for turn in turns if turn["turn_index"] in (pair_index * 2, pair_index * 2 + 1)
+        ]
+        if len(group) != 2:
+            continue
+        sequential, overlapped = group
+        pairs.append(
+            {
+                "pair": pair_index,
+                "sequential_time_to_first_audio_ms": sequential["timings_ms"][
+                    "time_to_first_audio"
+                ],
+                "overlapped_time_to_first_audio_ms": overlapped["timings_ms"][
+                    "time_to_first_audio"
+                ],
+                "delta_ms": round(
+                    sequential["timings_ms"]["time_to_first_audio"]
+                    - overlapped["timings_ms"]["time_to_first_audio"],
+                    3,
+                ),
+                "sequential_end_to_end_ms": sequential["timings_ms"]["end_to_end"],
+                "overlapped_end_to_end_ms": overlapped["timings_ms"]["end_to_end"],
+                "sequential_llm_total_ms": sequential["timings_ms"]["llm_total"],
+                "overlapped_llm_total_ms": overlapped["timings_ms"]["llm_total"],
+            }
+        )
+    summary["pairs"] = pairs
+
+    deltas = [pair["delta_ms"] for pair in pairs]
+    summary["result"] = {
+        "metric": "server-side time to first audio, turn_start to first audio available",
+        "per_pair_delta_ms": deltas,
+        "median_delta_ms": median(deltas),
+        "sign_convention": "positive means the overlapped policy produced audio earlier",
+        "note": (
+            "Time to first audio and total completion answer different questions, and "
+            "neither policy may be called faster without saying which one is meant."
+        ),
+    }
+
+    summary["validity"] = {
+        "policy_independent_spread": {
+            "stt_ms": _spread([turn["timings_ms"]["stt"] for turn in turns]),
+            "llm_ttft_ms": _spread([turn["timings_ms"]["llm_ttft"] for turn in turns]),
+        },
+        "why_this_matters": (
+            "Transcription and time to first token cannot be affected by the scheduling "
+            "policy. Their spread across the turns bounds how much of any difference in "
+            "time to first audio can reasonably be attributed to the policy."
+        ),
+    }
+
+    trace_path = Path(PAIRED_DIR, "trace.jsonl")
+    with trace_path.open("w") as handle:
+        handle.write(
+            _json(
+                {
+                    "trace_header": {
+                        "session_id": summary["session_id"],
+                        "experiment": 3,
+                        "clock": summary["clock"],
+                        "turn_order": [
+                            f"{turn['turn_index']}:{turn['policy']}" for turn in turns
+                        ],
+                    }
+                }
+            )
+            + "\n"
+        )
+        for turn in turns:
+            for event in turn["events"]:
+                handle.write(
+                    json.dumps({"turn": turn["turn_index"], "policy": turn["policy"], **event})
+                    + "\n"
+                )
+
+    summary["artifacts"] = {
+        "turn_wavs": [turn.get("wav") for turn in turns],
+        "trace_jsonl": str(trace_path),
+        "vllm_log": str(Path(PAIRED_DIR, "vllm_startup.log")),
+    }
+    summary["written_to"] = _write_report(summary, "paired/paired.json")
+
+    print(f"[paired] ok={summary['ok']}", flush=True)
+    print(f"[paired] medians_ms: {json.dumps(summary['medians_ms'])}", flush=True)
+    print(f"[paired] pairs: {json.dumps(pairs)}", flush=True)
+    print(f"[paired] result: {json.dumps(summary['result'])}", flush=True)
+    print(f"[paired] validity: {json.dumps(summary['validity'])}", flush=True)
     commit()
     return _json(summary)

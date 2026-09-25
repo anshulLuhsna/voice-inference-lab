@@ -164,3 +164,19 @@ def overlap_turn() -> str:
     difference is the scheduling policy inside the experiment module.
     """
     return exp.overlap_turn(commit=volume.commit)
+
+
+@app.function(
+    image=modular_image,
+    gpu="A10G",
+    volumes={exp.DATA_ROOT: volume},
+    timeout=3600,
+    min_containers=0,
+)
+def paired_turns() -> str:
+    """Both policies, back to back, in one container.
+
+    The comparison the first two experiments could not make: same container,
+    models loaded once, both first-call costs paid before any measured turn.
+    """
+    return exp.paired_turns(commit=volume.commit)
