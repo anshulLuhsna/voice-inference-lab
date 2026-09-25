@@ -78,15 +78,25 @@ Load, per component:
 | Mimi | 680 ms | 0.391 GB |
 | Moshi | 10,939 ms | 15.77 GB |
 
-Warm-up, as measured on four separate runs. Each number is the cost of pushing
-`EXPLICIT_WARMUP_FRAMES` (5) silent frames through the full path:
+Warm-up, being the cost of pushing `EXPLICIT_WARMUP_FRAMES` (5) silent frames
+through the full path. It is **not a constant**, and that is now measured across
+twelve container initialisations:
 
-| Run | Warm-up |
+| Condition | Warm-up |
 | --- | --- |
-| Offline, explicit-warmup run | 12,452 ms |
-| Offline, no-warmup run (first 3 frames) | 12,283 ms |
-| Offline, sustained run | 13,225 ms |
-| Live browser run | 12,421 ms |
+| Offline, three solo runs | 12,283 / 12,452 / 13,225 ms |
+| Live run 1, four initialisations | 12,421 / 12,864 / 17,357 / 19,843 ms |
+| Live run 2, five initialisations | 15,091 / 17,788 / 18,943 / 21,368 / 24,960 ms |
+
+Solo, the figure is tight, 12.28 to 13.23 s. Under concurrent container
+initialisation it ranged **12.42 to 24.96 s**, and in run 2 no initialisation
+came in under 15.09 s.
+
+**Interpretation, and it is only an interpretation.** Five containers each
+loading 15.8 GB of weights and capturing CUDA graphs while sharing one host is a
+plausible cause and it fits the shape of the numbers. It has not been tested. If
+"warm-up is about 12.4 s" is going in the article, it needs the qualifier "solo,
+with one container initialising".
 
 First real frame:
 
@@ -103,14 +113,22 @@ Steady state per frame:
 | Offline, sustained run | 48.4 ms | 48.4 ms | 49.4 ms |
 | Offline, sustained, before the wrap | 48.9 ms | — | 53.8 ms |
 | Offline, sustained, after the wrap | 49.4 ms | — | 51.1 ms |
-| Live browser run | 49.3 ms | — | — |
+| Live browser run 1 | 49.3 ms | — | — |
+| Live browser run 2 | 53.4 ms | — | — |
+
+**The live figure is one frame per run, not a steady-state average.** The live
+path records the first post-warm-up frame only, so those two numbers are single
+samples, and they differ by 8%. The offline columns are means over 156 to 3,394
+frames and are the reliable steady-state measurement. No steady-state series
+exists for the live path; producing one needs per-frame instrumentation on the
+live side.
 
 **Interpretation, not a universal claim.** The live microphone and WebSocket path
-reproduced the offline GPU compute cost per frame and the offline warm-up cost.
-Two independent harnesses, one with a fixture and one with a browser and a
-network in the path, produced essentially the same steady-state compute. This
-says nothing about browsers or WebSockets in general; it says this path added no
-measurable GPU cost to this model on this GPU class.
+did not materially change the GPU compute cost per frame. Two independent
+harnesses, one with a fixture and one with a browser and a network in the path,
+produced per-frame numbers of the same order, and the offline steady-state range
+covers the first live sample. This says nothing about browsers or WebSockets in
+general, and the live sample is too small to claim equality.
 
 ## 4. VRAM
 
@@ -213,6 +231,30 @@ speaker.
 The first-frame discard was **not audible** in the observed run. This is a
 subjective report from the speaker, not an instrument reading.
 
+### Second session, the verification run
+
+Session `06271fc0`. The same shape, independently:
+
+| Event | server_ms |
+| --- | --- |
+| `ws_connected` | 10.8 |
+| `first_mic_audio` | 370.2 |
+| `first_model_step` | 675.1 |
+| `first_model_audio` | 676.3 |
+| `first_chunk_sent` | 676.9, that frame 53.4 ms |
+| `client_playback_started` | 983.4 |
+| `disconnect` | 83540.1 |
+| `session_end` | 83559.4 |
+
+Server-clock spans: `first_mic_audio` to `first_chunk_sent` **306.7 ms**, and the
+socket was usable **83.5 s**, again ended by the client with no platform timeout.
+Two independent sessions put that span at 310.7 and 306.7 ms, which is the kind
+of agreement that makes a number worth quoting.
+
+The run also produced a **15 ms session**, `9d36ec40`: socket opened at 7.6 ms and
+closed at 22.2 ms. A connection that arrives and leaves immediately, recorded
+rather than filtered out.
+
 ## 8. Container and session lifecycle
 
 Container lifecycle is distinguishable from session lifecycle only because
@@ -220,9 +262,10 @@ initialisation now writes its own durable record.
 
 - `create_app()` runs **once per container**, not per connection. The model is
   loaded once per container and reused by connections to it.
-- **Four initialisations** occurred during one `modal serve` session, with
-  `load_and_warmup_ms` of 26309, 29324, 20995, 33901 and `warmup_ms` of 12421,
-  17357, 12864, 19843.
+- **Four initialisations** in the first browser session and **five** in the
+  second, each session being one page load and one live socket.
+  `load_and_warmup_ms` ran 20995 to 33901 in run 1 and 23545 to 38264 in run 2,
+  and every initialisation carried a distinct `MODAL_TASK_ID`.
 - The page request reported 33.2 s wall against 65.0 ms of handler execution, and
   three `/favicon.ico` requests reported 44.3 s, 24.6 s and 24.8 s against 378.8,
   187.1 and 188.3 ms.
@@ -242,7 +285,15 @@ initialisation now writes its own durable record.
   fired, nothing more.
 - **The exact container linger time** was polled by hand, twice, not
   instrumented.
-- **The four-initialisation cause is inferred.** See section 11.
+- **The multi-container cause is inferred, not tested.** See section 11.
+- **The live per-frame figure is a single frame per run.** Two runs gave 49.3 ms
+  and 53.4 ms. There is no live steady-state series, so no live steady-state
+  average exists to compare against the offline one.
+- **`container` is missing from the stdout init line.** The durable init record
+  carries it; the printed line does not, because it is emitted before the field
+  is set. The two artifacts therefore disagree, and the files are the authority.
+- **Warm-up varies by a factor of two** across initialisations and the cause is
+  unattributed.
 - **Raw device bytes were never captured on Modal.** The probe was extended to
   report them, but that revision has not been run, so device memory for Moshi v1
   rests on `23028 MiB` and `23.7 GB` from earlier runs.
@@ -282,8 +333,10 @@ In the repository:
 | `moshi_browser.py` | the live ASGI session |
 | `browser/index.html` | capture and playback page |
 | `modal_app.py` | the Modal shim: images, Volume, wrappers |
-| `traces/session-8d77f5f0.jsonl` | the successful live session trace |
-| `traces/README.md` | its measurement summary |
+| `traces/session-8d77f5f0.jsonl`, `session-06271fc0.jsonl` | the two live session traces |
+| `traces/session-9d36ec40.jsonl` | the 15 ms connection |
+| `traces/init/` | one durable init record per container, five files from run 2 |
+| `traces/README.md` | the first session's measurement summary |
 | `session.wav`, `human.wav`, `moshi.wav`, `mixed.wav` | audio evidence |
 | `infra/aws/`, `aws/` | the frozen AWS path, no measurements |
 
@@ -297,17 +350,20 @@ Commits, in order: `ff6518a` plumbing probe, `8df17be` pinned weight cache,
 
 **MEASURED** — our own instrumentation, our own runs.
 
-- Steady per-frame compute: offline 48.4–49.4 ms; live 49.3 ms.
-- Warm-up: offline 12,283 / 12,452 / 13,225 ms; live 12,421 ms.
+- Steady per-frame compute: offline 48.4–49.4 ms, as means over 156 to 3,394
+  frames; live 49.3 ms and 53.4 ms, each a single frame.
+- Warm-up: 12,283 to 13,225 ms solo across three offline runs, and 12,421 to
+  24,960 ms across nine live container initialisations.
 - Model load: Mimi 680 ms, Moshi 10,939 ms.
 - First real frame: 10,820 ms unwarmed, 46.0 ms warmed.
 - Peak allocated 17.642 GB, peak reserved 17.922 GB, minimum free 5.45 GB.
 - Sustained 3400 frames: memory growth exactly 0.0; latency 48.9 ms before the
   wrap, 49.4 ms after.
-- Live session: 49.3 ms for one frame; 310.7 ms from first mic frame to first
-  chunk sent, server clock; socket usable 175 s; no platform timeout.
-- Four container initialisations in one session with their load and warm-up
-  costs.
+- Live sessions: 49.3 and 53.4 ms for the first post-warm-up frame; 310.7 and
+  306.7 ms from first mic frame to first chunk sent, server clock; sockets usable
+  175 s and 83.5 s; no platform timeout in either.
+- Four container initialisations in one browser session, five in another, with
+  their load and warm-up costs and their distinct container ids.
 - Container scaled to zero after disconnect.
 
 **SOURCE-VERIFIED** — read from pinned upstream source, not measured by us.
@@ -338,6 +394,9 @@ Commits, in order: `ff6518a` plumbing probe, `8df17be` pinned weight cache,
 - That a `/favicon.ico` 404 cost a full GPU model load. This is the causal story
   that fits, and it is exactly the kind of claim that deserves its own experiment
   before it enters a comparison table.
+- That concurrent container initialisation is what inflates warm-up from about
+  12.4 s to as much as 25 s. Nine live initialisations fit the story, three solo
+  offline ones are tight, and the cause is untested.
 - That capture ran at 24 kHz.
 - That the 0.5 ms latency difference across the wrap is drift rather than a wrap
   effect.

@@ -1,0 +1,8 @@
+{"event": "ws_connected", "session": "06271fc0", "server_ms": 10.8, "frame_size": 1920}
+{"event": "first_mic_audio", "session": "06271fc0", "server_ms": 370.2, "bytes": 3840}
+{"event": "first_model_step", "session": "06271fc0", "server_ms": 675.1}
+{"event": "first_model_audio", "session": "06271fc0", "server_ms": 676.3}
+{"event": "first_chunk_sent", "session": "06271fc0", "server_ms": 676.9, "frame_ms": 53.4}
+{"event": "client_playback_started", "session": "06271fc0", "server_ms": 983.4, "browser_ms": 55569}
+{"event": "disconnect", "session": "06271fc0", "server_ms": 83540.1, "reason": "WebSocketDisconnect", "detail": "(1005, None)"}
+{"event": "session_end", "session": "06271fc0", "server_ms": 83559.4}

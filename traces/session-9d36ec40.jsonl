@@ -1,0 +1,3 @@
+{"event": "ws_connected", "session": "9d36ec40", "server_ms": 7.6, "frame_size": 1920}
+{"event": "disconnect", "session": "9d36ec40", "server_ms": 22.2, "reason": "WebSocketDisconnect", "detail": "(1005, None)"}
+{"event": "session_end", "session": "9d36ec40", "server_ms": 38.8}

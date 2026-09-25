@@ -1,0 +1,1 @@
+{"event": "server_ready", "started_wall": "2026-09-25T10:25:15+0000", "load_and_warmup_ms": 27021, "warmup_ms": 17788, "warmup_frames": 5, "frame_size": 1920, "torch": "2.4.1+cu121", "torch_cuda": "12.1", "container": "ta-01M3C1H1H17DJ1HH66HZD46BRR"}
