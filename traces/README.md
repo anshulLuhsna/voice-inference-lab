@@ -62,17 +62,52 @@ Deltas, computed only within the server clock:
   not zero and not indefinite. The exact duration was not instrumented, because
   this was polled by hand rather than measured.
 
-## Findings to act on later, not now
+## Container initialisation, investigated
 
-- `server_ready` should also be written to the session log, so container
-  initialisation becomes part of the durable artifact instead of stdout only.
-- `runtime.commit()` is called from an async context. Modal warns
-  `AsyncUsageWarning` and suggests `await runtime.commit.aio()`. Harmless here,
-  worth correcting.
-- **Four container initialisations in a single session** means the model load is
-  paid per container, not per session. Each container holds ~17.9 GB reserved.
-  This is the first real input to the idle-cost question, and it is larger than
-  expected.
+One `server_ready` per container, and four of them in a single run. Separating
+what is what:
+
+**Measured.** Four initialisations in one `modal serve` session, with
+`load_and_warmup_ms` of 26309, 29324, 20995 and 33901, and `warmup_ms` of 12421,
+17357, 12864 and 19843. Three `/favicon.ico` requests reported wall durations of
+44.3 s, 24.6 s and 24.8 s against handler executions of 378.8 ms, 187.1 ms and
+188.3 ms. The page request reported 33.2 s against 65.0 ms. Four
+initialisations, four HTTP requests, one WebSocket.
+
+**Known from the platform.** `@modal.concurrent(max_inputs=...)` is what allows a
+container to handle more than one input at a time. Without it a container serves
+one input at a time, and we do not use it, deliberately, because concurrency is
+out of scope. So while the WebSocket occupies a container, any other request
+needs a different container, and a fresh container re-runs `create_app()` and
+therefore reloads all 15.8 GB of weights.
+
+**Inferred, not proven.** The four initialisations line up one-to-one with the
+page load and the three favicon requests, and the favicon wall durations have the
+shape of waiting on a container boot plus a model load. The mechanism above
+explains the observation, but the counterfactual was never tested, so the
+attribution is inference. A 404 on a favicon costing a GPU model load is the
+kind of claim that deserves its own experiment before it goes in a comparison
+table.
+
+**Unknown.** Whether `modal serve` contributes anything of its own, being a dev
+server that watches the working directory. Whether the ASGI app is rebuilt per
+app revision separately from per container. And what the same run does under
+`modal deploy`, which is the path the article would actually care about.
+
+## Fixed in this milestone
+
+- Container initialisation now writes its own durable record, one file per
+  container, under `outputs/browser/init/`. The counting above can therefore be
+  done from the Volume instead of read out of stdout, and a container that
+  serves no session is still recorded, because it still cost.
+- The session-end commit now uses `await runtime.commit.aio()` rather than
+  blocking the event loop, which removes the `AsyncUsageWarning` Modal raised.
+
+## Deliberately not done
+
+Adding `@modal.concurrent` would collapse the extra containers, since a favicon
+request would no longer need its own GPU container. It is out of scope for Moshi
+v1, and it would change the very behaviour being measured.
 
 ## Scope
 

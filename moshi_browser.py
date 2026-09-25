@@ -28,6 +28,7 @@ session is itself one of the questions the article asks.
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from pathlib import Path
@@ -40,19 +41,45 @@ KIND_JSON = 2
 
 SESSION_LOG_DIR = f"{DATA_ROOT}/outputs/browser"
 
+# Container initialisation records, one file per container.
+INIT_LOG_DIR = f"{DATA_ROOT}/outputs/browser/init"
+
 # Where modal_app.live_image mounts the page inside the container. The two must
 # agree; if they do not, the first request fails on the path rather than
 # quietly serving nothing.
 PAGE_PATH = "/root/browser/index.html"
 
 
-def _noop() -> None:
+class _NoCommit:
     """Default durability hook. A plain filesystem needs nothing."""
+
+    def __call__(self) -> None:
+        return None
+
+    async def aio(self) -> None:
+        return None
 
 
 def _emit(record: dict) -> None:
     """Print one JSON object per line, so it lands in the platform log."""
     print(json.dumps(record), flush=True)
+
+
+def _record_init(record: dict, commit) -> None:
+    """Persist a container's own initialisation, then make it durable.
+
+    One file per container, because appending to one shared file from several
+    containers at once would not be safe. This is what makes initialisations
+    countable from the Volume rather than inferred from stdout, which matters
+    because a container that serves no session still initialises and still
+    costs.
+    """
+    task = os.environ.get("MODAL_TASK_ID") or uuid.uuid4().hex[:8]
+    record["container"] = task
+    path = Path(INIT_LOG_DIR) / f"init-{task}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record) + "\n")
+    commit()
 
 
 class SessionLog:
@@ -150,17 +177,18 @@ def _build(commit) -> Runtime:
     mimi.reset_streaming()
     lm_gen.reset_streaming()
 
-    _emit(
-        {
-            "event": "server_ready",
-            "load_and_warmup_ms": round((time.perf_counter() - started) * 1000),
-            "warmup_ms": warmup_ms,
-            "warmup_frames": EXPLICIT_WARMUP_FRAMES,
-            "frame_size": mimi.frame_size,
-            "torch": torch.__version__,
-            "torch_cuda": torch.version.cuda,
-        }
-    )
+    record = {
+        "event": "server_ready",
+        "started_wall": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "load_and_warmup_ms": round((time.perf_counter() - started) * 1000),
+        "warmup_ms": warmup_ms,
+        "warmup_frames": EXPLICIT_WARMUP_FRAMES,
+        "frame_size": mimi.frame_size,
+        "torch": torch.__version__,
+        "torch_cuda": torch.version.cuda,
+    }
+    _emit(record)
+    _record_init(record, commit)
     return Runtime(mimi, lm_gen, torch, commit)
 
 
@@ -254,11 +282,12 @@ async def _serve(sock, runtime) -> None:
         log.event("session_end")
         log.close()
         # The event log has to outlive the connection, so the provider is asked
-        # to make it durable.
-        runtime.commit()
+        # to make it durable. The async variant is used because this runs on the
+        # event loop: the blocking call blocks it, and Modal warns about that.
+        await runtime.commit.aio()
 
 
-def create_app(commit=_noop):
+def create_app(commit=_NoCommit()):
     """Build the ASGI app. Expected to run once per container, not per request."""
     from fastapi import FastAPI, WebSocket
     from fastapi.responses import HTMLResponse
