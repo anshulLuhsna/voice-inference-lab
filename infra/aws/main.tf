@@ -117,8 +117,8 @@ resource "aws_key_pair" "host" {
 
 # ---------------------------------------------------------------------------
 # Security group. Exactly one ingress rule, from the CIDR you supply, on port
-# 22. There is no 0.0.0.0/0 anywhere in this configuration and no default that
-# would produce one.
+# 22. There is no 0.0.0.0/0 ingress rule anywhere in this configuration and no
+# default that would produce one.
 #
 # Egress is unrestricted because the first thing the machine does is install a
 # pinned runtime from the network.
@@ -192,8 +192,8 @@ resource "aws_instance" "host" {
       # Valid with a one-time request, and required for a machine that is meant
       # to vanish rather than come back.
       instance_interruption_behavior = "terminate"
-      # Empty means the request is capped at the on-demand price for this
-      # instance type, which is the default and avoids bidding blind.
+      # Leave MaxPrice unset by default. AWS recommends not specifying a
+      # maximum price for Spot Instances.
       max_price = var.spot_max_price != "" ? var.spot_max_price : null
     }
   }

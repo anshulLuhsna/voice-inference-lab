@@ -12,6 +12,9 @@ instance_type = "g5.2xlarge"
 # Required. The only address allowed to reach SSH. Use your own public address
 # with a /32. There is no default for this on purpose: nothing should be able to
 # open port 22 to the world by omission.
+#
+# The value below is a placeholder from the documentation range. Validation
+# rejects it, so it cannot be used by accident. Replace it.
 ssh_ingress_cidr = "203.0.113.42/32"
 
 # Recommended. Paste the id reported by `terraform output resolved_ami_id` on
@@ -28,7 +31,8 @@ ami_id = ""
 # ssh_user            = "ubuntu"
 # root_volume_size_gb = 100
 #
-# Leave empty to accept the default cap, which is the on-demand price.
+# Leave MaxPrice unset by default. AWS recommends not specifying a maximum
+# price for Spot Instances.
 # spot_max_price      = ""
 
 tags = {

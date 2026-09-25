@@ -22,9 +22,9 @@ variable "instance_type" {
 
 variable "spot_max_price" {
   description = <<-EOT
-    Maximum hourly Spot price, for example "1.20". Leave empty to accept the
-    default cap, which is the on-demand price for the instance type. Leaving it
-    empty avoids bidding blind against current market prices.
+    Leave MaxPrice unset by default. AWS recommends not specifying a maximum
+    price for Spot Instances. Set a value only if you deliberately want to cap
+    the hourly price.
   EOT
   type        = string
   default     = ""
@@ -76,6 +76,16 @@ variable "ssh_ingress_cidr" {
     normally as a /32.
   EOT
   type        = string
+
+  validation {
+    condition     = can(cidrnetmask(var.ssh_ingress_cidr))
+    error_message = "ssh_ingress_cidr must be a valid IPv4 CIDR block with a prefix length, such as /32 for a single address."
+  }
+
+  validation {
+    condition     = !can(regex("^203\\.0\\.113\\.", var.ssh_ingress_cidr))
+    error_message = "ssh_ingress_cidr is inside the documentation range 203.0.113.0/24, so it is almost certainly not your address. Supply your real address."
+  }
 }
 
 # ---------------------------------------------------------------------------
