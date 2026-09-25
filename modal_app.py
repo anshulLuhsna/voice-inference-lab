@@ -35,15 +35,19 @@ cache_image = (
     .add_local_python_source(SOURCE)
 )
 
-# PHASE 2 and PHASE 3 image. Needs the pinned torch and moshi, and is forced
-# offline so it can only ever read the Volume -- a missing file becomes a loud
-# error rather than a silent re-download.
-load_image = (
+# The pinned runtime with nothing local mounted yet. Modal requires `add_local_*`
+# to be the last steps of an image build, so the base is kept separate and each
+# consumer attaches its own sources at the end.
+base_image = (
     modal.Image.debian_slim(python_version=exp.PYTHON_VERSION)
     .uv_pip_install(exp.TORCH_PACKAGE, exp.MOSHI_PACKAGE)
     .env({"HF_HOME": exp.HF_HOME, "HF_HUB_OFFLINE": "1"})
-    .add_local_python_source(SOURCE)
 )
+
+# PHASE 2 and PHASE 3 image. Needs the pinned torch and moshi, and is forced
+# offline so it can only ever read the Volume -- a missing file becomes a loud
+# error rather than a silent re-download.
+load_image = base_image.add_local_python_source(SOURCE)
 
 # The plumbing probe deliberately floats torch so it reports whatever the
 # platform hands out by default. That contrast is the point of keeping it.
@@ -61,7 +65,7 @@ check_image = (
 PAGE_REMOTE = "/root/browser/index.html"
 
 live_image = (
-    load_image.uv_pip_install("fastapi")
+    base_image.uv_pip_install("fastapi")
     .add_local_python_source(SOURCE, "moshi_browser")
     .add_local_file("browser/index.html", PAGE_REMOTE)
 )
