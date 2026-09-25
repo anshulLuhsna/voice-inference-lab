@@ -53,9 +53,14 @@ Deltas, computed only within the server clock:
   warns if the browser refuses 24 kHz, but the trace cannot prove which happened.
 - **Whether the discarded first frame is audible.** Subjective; the speaker
   reported the interaction working.
-- **How long the container lingers after disconnect.** A container was still
-  listed active several minutes after `session_end`. It was not watched to zero,
-  so no number is claimed.
+
+## Observed by polling the platform
+
+- **The container does scale to zero on its own.** One container was still
+  listed active shortly after `session_end`, and it was gone a couple of minutes
+  later, with no teardown from us. So the linger after disconnect is minutes,
+  not zero and not indefinite. The exact duration was not instrumented, because
+  this was polled by hand rather than measured.
 
 ## Findings to act on later, not now
 
