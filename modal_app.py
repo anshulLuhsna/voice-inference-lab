@@ -75,9 +75,18 @@ OUTPUT_OFFSET_FRAMES = 1
 # voice is favoured.
 MIX_SCALE = 0.5
 
-# The first frames carry CUDA graph capture and lazy kernel setup. They are
-# reported separately and excluded from the per frame summary.
-WARMUP_FRAMES = 3
+# Synthetic silent frames pushed through the full path before any real audio, to
+# move the one-time CUDA graph capture and lazy kernel setup off the first real
+# frame's critical path. Set this to 0 to restore the previous behaviour.
+#
+# The warm-up must share one streaming context with the real session. The graph
+# wrappers are built when the context is entered, so a second context would
+# rebuild them and throw the warm-up away.
+EXPLICIT_WARMUP_FRAMES = 5
+
+# The first real frame and the next five are reported on their own, so a warm-up
+# that failed to settle cannot hide inside an average.
+HEADLINE_FRAMES = 6
 
 # The three synchronized tracks. `session.wav` from the earlier 45 second test
 # is left in place.
@@ -372,6 +381,7 @@ def stream_session() -> str:
     wav = None
     track_samples = 0
     try:
+        run_start = time.perf_counter()
         weights = _resolve_weights(loaders)
 
         load_start = time.perf_counter()
@@ -440,19 +450,53 @@ def stream_session() -> str:
             "output_offset_frames": OUTPUT_OFFSET_FRAMES,
         }
 
+        # The peak spans the warm-up and the session, because that is the
+        # memory the container actually needs.
         torch.cuda.reset_peak_memory_stats()
-        report["vram_before_session"] = vram()
+        report["vram_after_load"] = vram()
+        warmup_min_free = None
         session_min_free = None
 
         lm_gen = LMGen(moshi, temp=0.8, temp_text=0.7)
 
         init_start = time.perf_counter()
+        # One streaming context for both phases. The CUDA graph wrappers live on
+        # the streaming state and are built when the context is entered, so a
+        # second context would rebuild them and discard the warm-up.
         with torch.no_grad(), lm_gen.streaming(1), mimi.streaming(1):
             torch.cuda.synchronize()
             init_ms = (time.perf_counter() - init_start) * 1000
+
+            # PHASE A -- explicit warm-up, before any real audio. Silent frames
+            # go through the full path so the graph capture lands here.
+            warmup_ms_list = []
+            warmup_start = time.perf_counter()
+            warmup_frame_start = warmup_start
+            for _ in range(EXPLICIT_WARMUP_FRAMES):
+                codes = mimi.encode(silence.unsqueeze(0).cuda())
+                tokens = lm_gen.step(codes)
+                if tokens is not None:
+                    mimi.decode(tokens[:, 1:])
+                free, _ = torch.cuda.mem_get_info()
+                warmup_min_free = free if warmup_min_free is None else min(warmup_min_free, free)
+                torch.cuda.synchronize()
+                now = time.perf_counter()
+                warmup_ms_list.append((now - warmup_frame_start) * 1000)
+                warmup_frame_start = now
+            warmup_ms = (time.perf_counter() - warmup_start) * 1000
+            report["vram_after_warmup"] = vram()
+
+            # Discard every trace of the warm-up before real audio arrives. This
+            # clears offsets and the step counter but keeps the graph wrappers,
+            # so the first real frame should again be the frame that yields no
+            # output.
+            lm_gen.reset_streaming()
+            mimi.reset_streaming()
+
+            # PHASE B -- the real fixture, on the already captured graphs.
             start = time.perf_counter()
             frame_start = start
-            per_frame_ms = []
+            real_frame_ms = []
             first_output_frame = None
             first_model_output_ms = None
 
@@ -478,36 +522,43 @@ def stream_session() -> str:
                 # disclosed rather than hidden.
                 torch.cuda.synchronize()
                 now = time.perf_counter()
-                per_frame_ms.append((now - frame_start) * 1000)
+                real_frame_ms.append((now - frame_start) * 1000)
                 frame_start = now
 
             torch.cuda.synchronize()
             total_ms = (time.perf_counter() - start) * 1000
 
-        warm = per_frame_ms[:WARMUP_FRAMES]
-        settled = per_frame_ms[WARMUP_FRAMES:]
+        settled = real_frame_ms[HEADLINE_FRAMES:]
+        frees = [value for value in (warmup_min_free, session_min_free) if value is not None]
+        report["warmup"] = {
+            "frames": len(warmup_ms_list),
+            "total_ms": round(warmup_ms),
+            "per_frame_ms": [round(value) for value in warmup_ms_list],
+            "min_device_free_gb": round(warmup_min_free / 1e9, 2) if warmup_min_free else None,
+        }
         report["session"] = {
             "streaming_context_init_ms": round(init_ms),
             "first_model_output_ms": round(first_model_output_ms) if first_model_output_ms else None,
             "first_output_at_frame": first_output_frame,
+            "first_real_frame_ms": round(real_frame_ms[0], 1),
+            "next_real_frames_ms": [round(value, 1) for value in real_frame_ms[1:HEADLINE_FRAMES]],
+            "steady_frames": len(settled),
+            "steady_mean_ms": round(sum(settled) / len(settled), 1) if settled else None,
+            "steady_median_ms": round(sorted(settled)[len(settled) // 2], 1) if settled else None,
+            "steady_max_ms": round(max(settled), 1) if settled else None,
             "total_ms": round(total_ms),
             "unpaced": True,
-        }
-        report["timing"] = {
-            "warmup_frames": len(warm),
-            "warmup_ms": [round(value) for value in warm],
-            "post_warmup_frames": len(settled),
-            "post_warmup_ms": [round(value) for value in settled],
-            "post_warmup_mean_ms": round(sum(settled) / len(settled), 1) if settled else None,
-            "post_warmup_median_ms": round(sorted(settled)[len(settled) // 2], 1) if settled else None,
-            "post_warmup_max_ms": round(max(settled), 1) if settled else None,
         }
         report["memory"] = {
             "vram_after_session": vram(),
             "peak_allocated_gb": round(torch.cuda.max_memory_allocated() / 1e9, 3),
             "peak_reserved_gb": round(torch.cuda.max_memory_reserved() / 1e9, 3),
-            "min_device_free_gb": round(session_min_free / 1e9, 2),
+            "min_device_free_gb": round(min(frees) / 1e9, 2) if frees else None,
+            "session_min_device_free_gb": (
+                round(session_min_free / 1e9, 2) if session_min_free else None
+            ),
         }
+        report["wall_clock_ms"] = round((time.perf_counter() - run_start) * 1000)
         report["oom"] = False
         report["completed"] = True
     except torch.cuda.OutOfMemoryError:
