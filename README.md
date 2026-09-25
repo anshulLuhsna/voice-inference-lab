@@ -28,8 +28,12 @@ forced it, not because we anticipated needing it.
    preallocated rather than merely bounded: allocated, reserved and free are
    identical at frames 0, 100, 2999, 3000, 3001 and 3399, and growth across the
    whole session is exactly zero.
-7. **AWS reproduction** (`aws/`) — current milestone. The same experiments on a
-   raw EC2 instance, for a controlled comparison against the managed runs.
+7. **AWS reproduction** (`aws/`, `infra/aws/`) — frozen. No g5.2xlarge Spot
+   capacity was available in ap-south-1 in any zone that offers the type, so the
+   comparison was never run. Result recorded in `infra/aws/README.md`.
+8. **Browser voice loop** — current milestone. Microphone to WebSocket to the
+   Modal-hosted Moshi session, streamed back to the browser. Implemented and
+   compiled; not yet run on a GPU.
 
 ## Layout
 
