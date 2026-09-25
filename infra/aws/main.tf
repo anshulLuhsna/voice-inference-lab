@@ -198,11 +198,17 @@ resource "aws_instance" "host" {
     }
   }
 
-  # A Spot request can queue when capacity is scarce, and the default create
-  # timeout of 10 minutes cancels a request that is still waiting rather than
-  # one that was rejected. ap-south-1b queues: it sat for over five minutes
-  # without resolving either way, while ap-south-1a rejected the request
-  # outright. This lets a queued request survive long enough to be fulfilled.
+  # A Spot request can queue when capacity is scarce rather than being rejected
+  # outright. ap-south-1a rejected it immediately with InsufficientInstanceCapacity,
+  # while ap-south-1b sat and retried for 47 minutes before failing the same way.
+  #
+  # Correction, measured after the fact: that 47 minutes was the AWS SDK's own
+  # retry loop, reported as "exceeded maximum number of attempts, 25", not a
+  # Terraform wait. This timeout therefore did not bound the operation, and the
+  # claim originally written here, that the 10 minute default cancels a queued
+  # request, was wrong. The block is kept because a bounded create is still a
+  # sensible default, but it is not the mechanism that governs a queued Spot
+  # request.
   timeouts {
     create = "30m"
   }
