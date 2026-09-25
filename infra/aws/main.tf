@@ -198,5 +198,14 @@ resource "aws_instance" "host" {
     }
   }
 
+  # A Spot request can queue when capacity is scarce, and the default create
+  # timeout of 10 minutes cancels a request that is still waiting rather than
+  # one that was rejected. ap-south-1b queues: it sat for over five minutes
+  # without resolving either way, while ap-south-1a rejected the request
+  # outright. This lets a queued request survive long enough to be fulfilled.
+  timeouts {
+    create = "30m"
+  }
+
   tags = merge(var.tags, { Name = var.name_prefix })
 }
