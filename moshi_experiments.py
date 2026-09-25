@@ -182,6 +182,10 @@ def inspect_gpu() -> str:
 
     Certifies the environment only. It says nothing about whether a given voice
     model will fit or run here.
+
+    GPU memory is reported as a raw byte count as well as rounded GB and GiB.
+    Providers render device memory in different units: 23.7 GB decimal and
+    22.1 GiB are the same number. Only the bytes may be compared.
     """
     import platform
     import shutil
@@ -208,6 +212,7 @@ def inspect_gpu() -> str:
 
     if report["cuda_available"]:
         props = torch.cuda.get_device_properties(0)
+        total_bytes = int(props.total_memory)
         a = torch.randn(512, 512, device="cuda")
         b = torch.randn(512, 512, device="cuda")
         start = time.perf_counter()
@@ -218,8 +223,10 @@ def inspect_gpu() -> str:
                 "device_count": torch.cuda.device_count(),
                 "device_name": props.name,
                 "compute_capability": f"{props.major}.{props.minor}",
-                "vram_total_gb": round(props.total_memory / 1e9, 1),
-                "vram_allocated_gb": round(torch.cuda.memory_allocated() / 1e9, 3),
+                "vram_total_bytes": total_bytes,
+                "vram_total_gb": round(total_bytes / 1e9, 1),
+                "vram_total_gib": round(total_bytes / 2**30, 2),
+                "vram_allocated_bytes": int(torch.cuda.memory_allocated()),
                 "matmul_ok": tuple(c.shape) == (512, 512),
                 "matmul_ms": round((time.perf_counter() - start) * 1000, 2),
             }
@@ -310,6 +317,7 @@ def load_model() -> str:
             "allocated_gb": round(torch.cuda.memory_allocated() / 1e9, 3),
             "free_gb": round(free / 1e9, 2),
             "total_gb": round(total / 1e9, 2),
+            "total_bytes": int(total),
         }
 
     def timed(label: str, load):
@@ -391,6 +399,7 @@ def stream_session(commit=_noop) -> str:
         "torch": torch.__version__,
         "torch_cuda": torch.version.cuda,
         "cuda_available": torch.cuda.is_available(),
+        "explicit_warmup_frames": EXPLICIT_WARMUP_FRAMES,
     }
     if not report["cuda_available"]:
         report["error"] = "CUDA is unavailable; refusing to fall back to CPU."
@@ -402,6 +411,7 @@ def stream_session(commit=_noop) -> str:
             "allocated_gb": round(torch.cuda.memory_allocated() / 1e9, 3),
             "free_gb": round(free / 1e9, 2),
             "total_gb": round(total / 1e9, 2),
+            "total_bytes": int(total),
         }
 
     outputs = []
