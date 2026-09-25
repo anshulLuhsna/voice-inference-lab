@@ -23,16 +23,31 @@ forced it, not because we anticipated needing it.
    with memory flat across both tested session lengths.
 5. **Explicit warm-up** — done. Moved the one-time initialization cost off the
    first real frame, from 10,820 ms to 46 ms, without keeping a GPU warm.
-6. **Sustained session past the context window** (`stream_session`) — current
-   milestone. Runs 3400 frames, about 272 seconds, to find out whether memory
-   stays bounded when a session crosses Moshi's 3000 frame window.
+6. **Sustained session past the context window** — done. 3400 frames, about 272
+   seconds, crossing Moshi's 3000 frame window. Memory turned out to be
+   preallocated rather than merely bounded: allocated, reserved and free are
+   identical at frames 0, 100, 2999, 3000, 3001 and 3399, and growth across the
+   whole session is exactly zero.
+7. **AWS reproduction** (`aws/`) — current milestone. The same experiments on a
+   raw EC2 instance, for a controlled comparison against the managed runs.
+
+## Layout
+
+`moshi_experiments.py` holds the experiment logic and imports no provider SDK.
+`modal_app.py` and `aws/run_experiment.py` are two thin runners around it. The
+provider mechanisms are deliberately not unified: Modal chooses a GPU with a
+request string and a managed lifecycle, while AWS chooses one with an instance
+type and a process you own. There is no cloud provider abstraction, because the
+differences are the thing being studied.
+
+The storage root comes from `VOICE_LAB_ROOT` and defaults to `/cache`, which is
+the Modal mount point.
 
 ## Why the phases are split
 
 The pinned checkpoint is ~15.8 GB (7.69B parameters at BF16). Downloading that
 on a GPU container would bill A10 time to move bytes that need no GPU at all.
-So acquisition and computation are separate invocations against one shared
-Modal Volume.
+So acquisition and computation are separate invocations sharing one cache.
 
 ```
 modal run modal_app.py::cache_weights    # CPU container, no GPU. Downloads.
@@ -43,6 +58,9 @@ modal run modal_app.py::inspect_gpu      # A10. Environment check.
 
 Running any of these spends money on your Modal account. A GPU command also
 requires a valid payment method on file.
+
+On AWS the same steps run through `aws/run_experiment.py`, which provisions
+nothing and assumes you already have shell access. See `aws/README.md`.
 
 ## The streaming session
 

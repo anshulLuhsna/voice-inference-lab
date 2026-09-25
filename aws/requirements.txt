@@ -1,0 +1,16 @@
+# The pinned runtime for the experiments, matching the Modal load image.
+#
+# torch and moshi carry the real constraints. moshi 0.2.13 declares
+# `torch<2.10,>=2.2.0`, and the Modal runs used the cu121 build of 2.4.1.
+#
+# Everything else in the resolved graph will be brought in by these two. The
+# versions the Modal build resolved were: numpy 2.2.6, huggingface-hub 0.36.2,
+# safetensors 0.7.0, sentencepiece 0.2.2, sphn 0.2.1, sounddevice 0.5.0,
+# einops 0.8.2, bitsandbytes 0.49.2, aiohttp 3.11.18, tqdm 4.70.1, hf-xet 1.6.0,
+# triton 3.0.0, plus the nvidia-*-cu12 wheels (cublas 12.1.3.1,
+# cudnn 9.1.0.70, nccl 2.20.5).
+#
+# Do not substitute the AMI's PyTorch. It is a different torch on a different
+# CUDA, and moshi pins the range for a reason.
+torch==2.4.1
+moshi==0.2.13
