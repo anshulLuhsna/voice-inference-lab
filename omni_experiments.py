@@ -320,6 +320,26 @@ def _deploy_config_text() -> dict:
     return result
 
 
+def _served_model() -> str:
+    """The model id the server actually registered, read rather than assumed.
+
+    The request was rejected with "the model ... does not exist", which is the
+    server saying our string does not match the id it registered. It advertises
+    that id at /v1/models, so asking beats guessing -- and the alternative is a
+    404 that a human would read as a route problem when it is a name problem.
+    """
+    import json
+    import urllib.request
+
+    with urllib.request.urlopen(
+        f"http://127.0.0.1:{OMNI_PORT}/v1/models", timeout=30
+    ) as response:
+        payload = json.loads(response.read())
+    for model in payload.get("data", []):
+        return model.get("id")
+    return None
+
+
 def _routes() -> dict:
     """The route table the server publishes about itself.
 
@@ -690,6 +710,11 @@ def omni_turn(commit=_noop) -> str:
         report["device_after_server"] = _device()
 
         # --- one turn ------------------------------------------------------
+        served_model_name = _served_model()
+        report["served_model_name"] = served_model_name
+        if not served_model_name:
+            raise RuntimeError("/v1/models returned no model id")
+
         routes = _routes()
         report["routes"] = routes
         endpoint = _chat_endpoint(routes)
@@ -708,7 +733,7 @@ def omni_turn(commit=_noop) -> str:
         # two messages, which was never exercised because the route 404'd first.
         body = json.dumps(
             {
-                "model": OMNI_SERVED_NAME,
+                "model": served_model_name,
                 "messages": [
                     {
                         "role": "user",
