@@ -745,7 +745,7 @@ def omni_turn(commit=_noop) -> str:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "audio_url", "audio_url": {"url": OMNI_FIXTURE}},
+                            {"type": "audio_url", "audio_url": {"url": Path(OMNI_FIXTURE).as_uri()}},
                             {"type": "text", "text": OMNI_PROMPT},
                         ],
                     }
