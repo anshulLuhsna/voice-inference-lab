@@ -78,7 +78,7 @@ def cache_model() -> str:
 
 @app.function(
     image=runtime_image,
-    gpu="A10G:2",
+    gpu="H200:2",
     volumes={exp.DATA_ROOT: volume},
     timeout=7200,
     min_containers=0,

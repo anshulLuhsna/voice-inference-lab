@@ -52,42 +52,57 @@ PYTHON_VERSION = "3.12"
 # that points nowhere useful. That pairing is the reason this image has its own
 # version constant rather than reusing the modular stack's.
 # ---------------------------------------------------------------------------
-OMNI_MODEL_REPO = "Qwen/Qwen2.5-Omni-3B"
-OMNI_MODEL_DIR = f"{MODELS_DIR}/Qwen2.5-Omni-3B"
+OMNI_MODEL_REPO = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
+OMNI_MODEL_DIR = f"{MODELS_DIR}/Qwen3-Omni-30B-A3B-Instruct"
 OMNI_SERVED_NAME = OMNI_MODEL_REPO
 
-# Switched from Qwen/Qwen3-Omni-30B-A3B-Instruct, deliberately and on the record.
+# The real reason this does not serve on vLLM-Omni 0.28.0, established by
+# research rather than by inference from our own failures.
 #
-# The 30B is the model this phase was specified around and it does not serve
-# here: its shipped deploy config is a two-GPU topology (thinker on device 0 at
-# 0.9, talker and code2wav on device 1 at 0.6 and 0.1), and on a single 80 GiB
-# card those fractions sum to 1.6 of one device. It failed identically on an
-# A100-80GB and on a 141 GB H200 -- 139.04 GiB of 139.80 GiB already held by
-# another process before stage 0 asked for its share -- which is what proved the
-# constraint was the topology and not the memory. On two H100s the placement
-# came up correctly and stage 0 then missed by 0.2 GiB. That is the point at
-# which continuing stops being measurement and becomes debugging the vendor's
-# deployment, so the smaller documented model is used instead.
+# vLLM-Omni 0.30.0's release notes describe parallel stage initialization with
+# device-aware admission and locking. The RFC behind that work states the old
+# path used **process-scoped NVML memory estimation** for LLM stages, which let
+# colocated stages profile and allocate against the whole device rather than
+# against their own share. The replacement sums stage budgets, graph reserves and
+# safety margin and admits them against the physical GPU before launching, with
+# per-device locks around profiling.
 #
-# Qwen2.5-Omni-3B is the same architecture family -- thinker and talker, same
-# staged serving -- so it answers the same architectural question at a size that
-# fits hardware this project has already validated.
-OMNI_MIN_VRAM_GB = 78.85  # the 30B's documented figure, kept for comparison
+# That fits every measurement we took:
+
+#   - "Available KV cache memory: 125.82 GiB (process-scoped)" on a 141 GB card
+#     whose Process 1 already held 139.04 GiB, then a 2.62 GiB allocation OOM.
+#   - 80 GB and 141 GB failing with byte-identical 458-line logs. A capacity
+#     problem cannot produce that; a per-process accounting problem can.
+#   - v0.28.0 has a separate, reproduced bug where shared-GPU stages hit a
+#     spawn-lock/device-lock inversion during initialization even when the
+#     budget sums are valid.
+#
+# So 0.28.0 was the problem, not the deploy config. The config's fractions are
+# per *device*, not per stage: 0.9 on GPU 0 and 0.6 + 0.1 = 0.7 on GPU 1, which
+# is comfortably under 1.0 on each. They only overcommit if every stage is forced
+# onto one card.
+
+# Switched back to the 30B. The 3B was tried on the belief that the constraint
+# was the model's size, which the research above shows it was not: the 3B failed
+# the same way on one A10, so the size was never the variable.
 
 # The pairing, and why it is not simply "the newest of each".
 #
 # vLLM-Omni publishes stable releases on every EVEN-numbered upstream vLLM
-# minor, and only a release candidate exists for 0.30: the tags are v0.30.0rc1,
-# v0.29.0rc1, v0.28.0, v0.26.0 and so on down. So the choice is between pairing
-# a stable vLLM with an RC of vLLM-Omni, or stepping the pair back one minor and
-# having both sides be stable releases.
+# minor. An earlier pin used 0.28.0, on the reading that only a release candidate
+# existed for 0.30; v0.30.0 has since shipped, and its device-aware stage
+# admission is the fix, so both sides now sit at 0.30.0.
 #
-# Given the documented rule that the two must share a major and a minor, and
-# given that a version mismatch here fails in a way that points nowhere useful,
-# both sides are pinned to 0.28.0. That is not the newest vLLM; it is the newest
-# pair that is entirely released.
-VLLM_VERSION = "0.28.0"
-VLLM_OMNI_REF = "v0.28.0"
+# Given the documented rule that the two must share a major and a minor, the
+# The versions the install docs currently target, and the fix for the failure
+# above. Both sides move together: vLLM owns the CLI and delegates `--omni`, and
+# the two must share a major and a minor.
+#
+# This replaces an earlier pin to 0.28.0 on the reasoning that no stable 0.30
+# existed. That is no longer true -- v0.30.0 shipped -- and the device-aware
+# stage admission it adds is precisely what was missing.
+VLLM_VERSION = "0.30.0"
+VLLM_OMNI_REF = "v0.30.0"
 VLLM_OMNI_REPO = "https://github.com/vllm-project/vllm-omni.git"
 
 # The CUDA backend is named, not auto-detected, and the reason is the opposite
@@ -305,6 +320,56 @@ def _deploy_config_text() -> dict:
     return result
 
 
+def _routes() -> dict:
+    """The route table the server publishes about itself.
+
+    A hardcoded path cannot distinguish "wrong endpoint" from "endpoint
+    disabled", and the run that answered /v1/models but returned 404 for
+    /v1/chat/completions cost a cycle to exactly that ambiguity. So ask the
+    server instead of assuming.
+    """
+    import json
+    import urllib.request
+
+    for path in ("/openapi.json", "/v1/openapi.json", "/docs/openapi.json"):
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{OMNI_PORT}{path}", timeout=30
+            ) as response:
+                spec = json.loads(response.read())
+            return {
+                route: sorted(str(method).upper() for method in methods)
+                for route, methods in (spec.get("paths") or {}).items()
+            }
+        except Exception:  # noqa: BLE001 - try the next location
+            continue
+    return {}
+
+
+def _chat_endpoint(routes: dict):
+    """Pick the chat route out of whatever the server advertises.
+
+    The exact path first, then anything that looks like chat completions, then
+    anything mentioning chat. Reported either way, so a wrong choice is visible
+    in the artifact rather than inferred from a status code.
+    """
+    posts = [
+        route
+        for route, methods in routes.items()
+        if "POST" in methods
+    ]
+    for candidate in ("/v1/chat/completions", "/chat/completions"):
+        if candidate in posts:
+            return candidate
+    for route in posts:
+        if "chat" in route and "completion" in route:
+            return route
+    for route in posts:
+        if "chat" in route:
+            return route
+    return None
+
+
 def _omni_command() -> list:
     """The documented serve command for Qwen3-Omni, plus one requirement.
 
@@ -512,6 +577,7 @@ def omni_turn(commit=_noop) -> str:
     import json
     import time
     import traceback
+    import urllib.error
     import urllib.request
     from pathlib import Path
 
@@ -624,29 +690,61 @@ def omni_turn(commit=_noop) -> str:
         report["device_after_server"] = _device()
 
         # --- one turn ------------------------------------------------------
+        routes = _routes()
+        report["routes"] = routes
+        endpoint = _chat_endpoint(routes)
+        report["request_endpoint"] = endpoint
+        report["endpoint_candidates"] = sorted(
+            route for route, methods in routes.items() if "POST" in methods
+        )
+        if endpoint is None:
+            raise RuntimeError(
+                f"the server advertises no chat route; POST routes were "
+                f"{report['endpoint_candidates'][:40]}"
+            )
+
+        # One user message holding audio then text, which is the shape the
+        # model's own documentation shows. The earlier attempt split them across
+        # two messages, which was never exercised because the route 404'd first.
         body = json.dumps(
             {
                 "model": OMNI_SERVED_NAME,
                 "messages": [
-                    {"role": "user", "content": OMNI_PROMPT},
-                    {"role": "user", "content": [
-                        {"type": "audio_url", "audio_url": {"url": OMNI_FIXTURE}}
-                    ]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "audio_url", "audio_url": {"url": OMNI_FIXTURE}},
+                            {"type": "text", "text": OMNI_PROMPT},
+                        ],
+                    }
                 ],
                 "modalities": ["text", "audio"],
                 "max_tokens": 256,
             }
         ).encode()
 
-        emit("request_start")
+        emit("request_start", endpoint=endpoint)
         request_started = clock()
         request = urllib.request.Request(
-            f"http://127.0.0.1:{OMNI_PORT}/v1/chat/completions",
+            f"http://127.0.0.1:{OMNI_PORT}{endpoint}",
             data=body,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(request, timeout=OMNI_REQUEST_TIMEOUT_SECONDS) as response:
-            payload = json.loads(response.read())
+        try:
+            with urllib.request.urlopen(
+                request, timeout=OMNI_REQUEST_TIMEOUT_SECONDS
+            ) as response:
+                payload = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            # Keep the body. A bare status code is what cost the last run: a 404
+            # said nothing about whether the route was wrong or absent.
+            detail = exc.read().decode(errors="replace")[:2000]
+            report["request_error"] = {
+                "status": exc.code,
+                "endpoint": endpoint,
+                "body": detail,
+            }
+            raise RuntimeError(f"HTTP {exc.code} from {endpoint}: {detail[:400]}") from exc
         request_seconds = round(clock() - request_started, 3)
         emit("request_complete", seconds=request_seconds)
 
