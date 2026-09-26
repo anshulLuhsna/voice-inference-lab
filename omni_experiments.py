@@ -402,6 +402,8 @@ def _omni_command() -> list:
         "vllm",
         "serve",
         OMNI_MODEL_DIR,
+        "--served-model-name",
+        OMNI_SERVED_NAME,
         "--omni",
         "--port",
         str(OMNI_PORT),
@@ -712,8 +714,13 @@ def omni_turn(commit=_noop) -> str:
         # --- one turn ------------------------------------------------------
         served_model_name = _served_model()
         report["served_model_name"] = served_model_name
-        if not served_model_name:
-            raise RuntimeError("/v1/models returned no model id")
+        if served_model_name != OMNI_SERVED_NAME:
+            raise RuntimeError(
+                f"--served-model-name did not take effect: the server reports "
+                f"{served_model_name!r}, expected {OMNI_SERVED_NAME!r}. vLLM "
+                f"defaults the API name to the --model argument, which was a local "
+                f"path, so the flag exists to force the checkpoint's real id."
+            )
 
         routes = _routes()
         report["routes"] = routes
@@ -733,7 +740,7 @@ def omni_turn(commit=_noop) -> str:
         # two messages, which was never exercised because the route 404'd first.
         body = json.dumps(
             {
-                "model": served_model_name,
+                "model": OMNI_SERVED_NAME,
                 "messages": [
                     {
                         "role": "user",
