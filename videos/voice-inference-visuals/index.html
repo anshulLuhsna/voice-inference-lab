@@ -62,16 +62,16 @@
       .clip {
         position: absolute;
         inset: 0;
-        padding: 72px 88px 56px;
+        padding: 40px 48px 36px;
         display: flex;
         flex-direction: column;
       }
       .kicker {
-        margin: 0 0 10px;
+        margin: 0 0 8px;
         font-family: Inter, sans-serif;
         font-weight: 500;
-        font-size: 18px;
-        letter-spacing: 0.16em;
+        font-size: 26px;
+        letter-spacing: 0.14em;
         text-transform: uppercase;
         color: #c6a56a;
       }
@@ -79,37 +79,40 @@
         margin: 0;
         font-family: "EB Garamond", serif;
         font-weight: 400;
-        font-size: 68px;
+        font-size: 84px;
         line-height: 0.95;
         letter-spacing: -0.02em;
       }
       .caption {
-        margin-top: auto;
+        margin-top: 32px;
         font-family: "EB Garamond", serif;
         font-style: italic;
-        font-size: 32px;
+        font-size: 42px;
         color: #e7dcc8;
       }
       .panels {
         display: grid;
         grid-template-columns: 1fr 1fr 1fr;
-        gap: 28px;
-        margin-top: 48px;
+        gap: 24px;
+        margin-top: 28px;
+        flex: 1;
+        min-height: 0;
       }
       .panel {
         background: #1c1916;
         border: 1px solid #3d362e;
         border-radius: 18px;
         padding: 28px 24px 32px;
-        min-height: 560px;
+        height: 100%;
         display: flex;
         flex-direction: column;
+        overflow: hidden;
       }
       .panel h2 {
-        margin: 0 0 28px;
+        margin: 0 0 20px;
         font-family: Inter, sans-serif;
         font-weight: 500;
-        font-size: 20px;
+        font-size: 32px;
         letter-spacing: 0.04em;
         color: #cbbba6;
       }
@@ -117,17 +120,19 @@
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 8px;
+        justify-content: center;
+        gap: 12px;
+        flex: 1;
       }
       .node {
-        height: 52px;
-        width: 180px;
-        border-radius: 10px;
+        height: 64px;
+        width: 240px;
+        border-radius: 12px;
         display: grid;
         place-items: center;
         font-family: Inter, sans-serif;
-        font-weight: 500;
-        font-size: 18px;
+        font-weight: 600;
+        font-size: 30px;
         color: #1a1714;
       }
       .node.audio { background: #e7dcc8; }
@@ -135,8 +140,8 @@
       .node.think { background: #c6a56a; }
       .node.speak { background: #efe4cf; }
       .arrow {
-        width: 2px;
-        height: 14px;
+        width: 3px;
+        height: 16px;
         background: #c6a56a;
         position: relative;
         flex: 0 0 auto;
@@ -158,29 +163,29 @@
       .stream-row {
         display: flex;
         align-items: center;
-        gap: 18px;
+        gap: 14px;
       }
       .model-box {
         width: 220px;
-        height: 140px;
+        height: 170px;
         border-radius: 16px;
         background: #c6a56a;
         color: #1a1714;
         display: grid;
         place-items: center;
         font-family: "EB Garamond", serif;
-        font-size: 32px;
+        font-size: 42px;
       }
       .flow {
         font-family: Inter, sans-serif;
-        font-size: 18px;
+        font-size: 26px;
         color: #e7dcc8;
         text-align: center;
-        width: 90px;
+        width: auto;
       }
       .omni-shell {
         width: 100%;
-        height: 360px;
+        height: 100%;
         border-radius: 16px;
         border: 1px solid #5c5348;
         display: flex;
@@ -191,28 +196,33 @@
       }
       .omni-title {
         font-family: "EB Garamond", serif;
-        font-size: 36px;
+        font-size: 56px;
       }
       .omni-jobs {
         display: flex;
         gap: 12px;
       }
       .faint {
-        width: 120px;
-        height: 72px;
-        border-radius: 10px;
+        width: 160px;
+        height: 100px;
+        border-radius: 12px;
         border: 1px solid rgba(198, 165, 106, 0.55);
         display: grid;
         place-items: center;
         font-family: Inter, sans-serif;
-        font-size: 16px;
+        font-size: 26px;
         color: #cbbba6;
       }
-      .bar-wrap { margin-top: 120px; }
+      .bar-wrap {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
       .mem-bar {
         display: flex;
         width: 100%;
-        height: 96px;
+        height: 280px;
         border-radius: 12px;
         overflow: hidden;
         background: #1c1916;
@@ -224,11 +234,11 @@
         place-items: center;
         font-family: Inter, sans-serif;
         font-weight: 600;
-        font-size: 22px;
+        font-size: 42px;
         color: #1a1714;
       }
       .seg.listen { background: #a8b5a0; flex: 2.4; }
-      .seg.speak { background: #efe4cf; flex: 0.7; font-size: 16px; }
+      .seg.speak { background: #efe4cf; flex: 0.7; font-size: 22px; }
       .seg.think { background: #c6a56a; flex: 9; }
       .seg.free {
         background: transparent;
@@ -238,9 +248,9 @@
       }
       .mem-names {
         display: flex;
-        margin-top: 16px;
+        margin-top: 22px;
         font-family: Inter, sans-serif;
-        font-size: 20px;
+        font-size: 34px;
         color: #cbbba6;
       }
       .mem-names span { text-align: center; }
@@ -251,33 +261,34 @@
       .total {
         margin-top: 28px;
         font-family: Inter, sans-serif;
-        font-size: 22px;
+        font-size: 34px;
         color: #c6a56a;
       }
       .units {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
-        gap: 32px;
-        margin-top: 80px;
-        align-items: end;
+        gap: 28px;
+        margin-top: 16px;
+        flex: 1;
+        align-items: center;
       }
-      .unit { display: flex; flex-direction: column; align-items: center; gap: 22px; }
+      .unit { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; height: 100%; }
       .unit p {
         margin: 0;
         font-family: Inter, sans-serif;
-        font-size: 22px;
+        font-size: 34px;
         color: #e7dcc8;
         text-align: center;
       }
       .sliver {
-        width: 18px;
-        height: 220px;
+        width: 32px;
+        height: 460px;
         border-radius: 9px;
         background: linear-gradient(#c6a56a, #a8b5a0);
       }
       .window {
-        width: 240px;
-        height: 160px;
+        width: 360px;
+        height: 250px;
         border-radius: 12px;
         border: 1px solid #c6a56a;
         padding: 18px;
@@ -287,84 +298,92 @@
       }
       .window i {
         display: block;
-        height: 8px;
+        height: 16px;
         border-radius: 4px;
         background: #3d362e;
       }
       .window i.on { background: #c6a56a; width: 70%; }
       .token {
-        width: 88px;
-        height: 88px;
-        border-radius: 12px;
+        width: 160px;
+        height: 160px;
+        border-radius: 16px;
         background: #c6a56a;
         color: #1a1714;
         display: grid;
         place-items: center;
         font-family: "EB Garamond", serif;
-        font-size: 40px;
+        font-size: 72px;
       }
       .sentence {
-        width: 320px;
-        padding: 22px 24px;
-        border-radius: 12px;
+        width: 420px;
+        padding: 36px 32px;
+        border-radius: 16px;
         background: #efe4cf;
         color: #1a1714;
         font-family: "EB Garamond", serif;
-        font-size: 26px;
+        font-size: 40px;
         line-height: 1.25;
       }
-      .clocks { margin-top: 56px; display: flex; flex-direction: column; gap: 28px; }
+      .clocks {
+        margin-top: 12px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 52px;
+        flex: 1;
+      }
       .clock {
         display: grid;
-        grid-template-columns: 180px 1fr 280px;
+        grid-template-columns: 250px 1fr 380px;
         align-items: center;
-        gap: 24px;
+        gap: 28px;
       }
       .clock .name {
         font-family: Inter, sans-serif;
-        font-size: 28px;
+        font-size: 44px;
         color: #f4efe6;
       }
       .rail {
         position: relative;
-        height: 2px;
+        height: 4px;
         background: #3d362e;
       }
       .tick {
         position: absolute;
-        top: -8px;
-        width: 2px;
-        height: 18px;
+        top: -14px;
+        width: 4px;
+        height: 32px;
         background: #c6a56a;
       }
       .stamp {
         font-family: Inter, sans-serif;
-        font-size: 22px;
+        font-size: 34px;
         color: #cbbba6;
       }
       .bad {
-        margin-top: 36px;
+        margin-top: 8px;
         font-family: Inter, sans-serif;
-        font-size: 28px;
+        font-size: 40px;
         color: #e7b2a4;
       }
       .bars {
         display: flex;
         align-items: flex-end;
         gap: 36px;
-        height: 500px;
-        margin-top: 28px;
+        height: auto;
+        flex: 1;
+        margin-top: 12px;
         padding: 0 40px;
         justify-content: space-evenly;
       }
-      .col { display: flex; flex-direction: column; align-items: center; gap: 16px; width: 220px; }
+      .col { display: flex; flex-direction: column; align-items: center; gap: 18px; width: 280px; }
       .col .val {
         font-family: "EB Garamond", serif;
-        font-size: 36px;
+        font-size: 52px;
         color: #f4efe6;
       }
       .column {
-        width: 120px;
+        width: 168px;
         border-radius: 10px 10px 4px 4px;
         background: #c6a56a;
         transform-origin: center bottom;
@@ -372,27 +391,29 @@
       .column.dim { background: #5c4b32; }
       .col .lab {
         font-family: Inter, sans-serif;
-        font-size: 18px;
+        font-size: 28px;
         color: #cbbba6;
       }
       .gpus {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 28px;
-        margin-top: 48px;
+        margin-top: 24px;
+        flex: 1;
+        min-height: 0;
       }
       .gpu {
         background: #1c1916;
         border: 1px solid #3d362e;
         border-radius: 18px;
-        padding: 28px;
-        min-height: 520px;
+        padding: 36px 40px;
+        height: 100%;
       }
       .gpu h2 {
         margin: 0 0 8px;
         font-family: Inter, sans-serif;
         font-weight: 500;
-        font-size: 18px;
+        font-size: 28px;
         letter-spacing: 0.14em;
         text-transform: uppercase;
         color: #c6a56a;
@@ -400,28 +421,32 @@
       .gpu .sub {
         margin: 0 0 28px;
         font-family: Inter, sans-serif;
-        font-size: 20px;
+        font-size: 30px;
         color: #cbbba6;
       }
       .stage {
-        border-radius: 12px;
-        padding: 22px 24px;
-        margin-bottom: 16px;
+        border-radius: 14px;
+        padding: 36px 32px;
+        margin-bottom: 20px;
         display: flex;
         justify-content: space-between;
         align-items: center;
         font-family: Inter, sans-serif;
-        font-size: 28px;
+        font-size: 42px;
         color: #1a1714;
       }
       .stage b { font-weight: 600; }
-      .stage span { font-size: 20px; }
+      .stage span { font-size: 32px; }
       .stage.thinker { background: #c6a56a; }
       .stage.talker { background: #e7dcc8; }
       .stage.codec { background: #a8b5a0; width: 42%; }
       .outside {
         font-family: "EB Garamond", serif;
-        font-size: 42px;
+        font-size: 84px;
+      }
+      #architectures .caption,
+      #warmup .caption {
+        margin-top: 48px;
       }
       .kicker, h1, .caption, .node, .arrow, .panel h2, .flow, .model-box,
       .omni-shell, .faint, .mem-bar, .seg, .mem-names, .total, .unit, .clock, .bad,
@@ -559,27 +584,27 @@
         <div class="bars">
           <div class="col" id="col-1">
             <div class="val">10.8 s</div>
-            <div class="column" id="bar-1" style="height: 400px"></div>
+            <div class="column" id="bar-1" style="height: 420px"></div>
             <div class="lab">first frame</div>
           </div>
           <div class="col" id="col-2">
             <div class="val">987 ms</div>
-            <div class="column dim" id="bar-2" style="height: 300px"></div>
+            <div class="column dim" id="bar-2" style="height: 330px"></div>
             <div class="lab">second</div>
           </div>
           <div class="col" id="col-3">
             <div class="val">476 ms</div>
-            <div class="column dim" id="bar-3" style="height: 230px"></div>
+            <div class="column dim" id="bar-3" style="height: 250px"></div>
             <div class="lab">third</div>
           </div>
           <div class="col" id="col-4">
             <div class="val">49 ms</div>
-            <div class="column" id="bar-4" style="height: 64px"></div>
+            <div class="column" id="bar-4" style="height: 110px"></div>
             <div class="lab">settled</div>
           </div>
           <div class="col" id="col-5">
             <div class="val">46 ms</div>
-            <div class="column" id="bar-5" style="height: 52px"></div>
+            <div class="column" id="bar-5" style="height: 92px"></div>
             <div class="lab">warm</div>
           </div>
         </div>
