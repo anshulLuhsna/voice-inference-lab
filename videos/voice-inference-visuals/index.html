@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Voice inference figures</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "EB Garamond";
+        src: url("assets/fonts/EBGaramond12-Regular.ttf") format("truetype");
+        font-weight: 400;
+        font-style: normal;
+      }
+      @font-face {
+        font-family: "EB Garamond";
+        src: url("assets/fonts/EBGaramond12-Italic.ttf") format("truetype");
+        font-weight: 400;
+        font-style: italic;
+      }
+      @font-face {
+        font-family: "EB Garamond";
+        src: url("assets/fonts/EBGaramond12-Bold.ttf") format("truetype");
+        font-weight: 700;
+        font-style: normal;
+      }
+      @font-face {
+        font-family: "Inter";
+        src: url("assets/fonts/Inter-Regular.otf") format("opentype");
+        font-weight: 400;
+        font-style: normal;
+      }
+      @font-face {
+        font-family: "Inter";
+        src: url("assets/fonts/Inter-Medium.otf") format("opentype");
+        font-weight: 500;
+        font-style: normal;
+      }
+      @font-face {
+        font-family: "Inter";
+        src: url("assets/fonts/Inter-SemiBold.otf") format("opentype");
+        font-weight: 600;
+        font-style: normal;
+      }
+
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #141210;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #141210;
+        color: #f4efe6;
+      }
+      .clip {
+        position: absolute;
+        inset: 0;
+        padding: 72px 88px 56px;
+        display: flex;
+        flex-direction: column;
+      }
+      .kicker {
+        margin: 0 0 10px;
+        font-family: Inter, sans-serif;
+        font-weight: 500;
+        font-size: 18px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: #c6a56a;
+      }
+      h1 {
+        margin: 0;
+        font-family: "EB Garamond", serif;
+        font-weight: 400;
+        font-size: 68px;
+        line-height: 0.95;
+        letter-spacing: -0.02em;
+      }
+      .caption {
+        margin-top: auto;
+        font-family: "EB Garamond", serif;
+        font-style: italic;
+        font-size: 32px;
+        color: #e7dcc8;
+      }
+      .panels {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 28px;
+        margin-top: 48px;
+      }
+      .panel {
+        background: #1c1916;
+        border: 1px solid #3d362e;
+        border-radius: 18px;
+        padding: 28px 24px 32px;
+        min-height: 560px;
+        display: flex;
+        flex-direction: column;
+      }
+      .panel h2 {
+        margin: 0 0 28px;
+        font-family: Inter, sans-serif;
+        font-weight: 500;
+        font-size: 20px;
+        letter-spacing: 0.04em;
+        color: #cbbba6;
+      }
+      .chain {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+      }
+      .node {
+        height: 52px;
+        width: 180px;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        font-family: Inter, sans-serif;
+        font-weight: 500;
+        font-size: 18px;
+        color: #1a1714;
+      }
+      .node.audio { background: #e7dcc8; }
+      .node.listen { background: #a8b5a0; }
+      .node.think { background: #c6a56a; }
+      .node.speak { background: #efe4cf; }
+      .arrow {
+        width: 2px;
+        height: 14px;
+        background: #c6a56a;
+        position: relative;
+        flex: 0 0 auto;
+      }
+      .arrow::after {
+        content: "";
+        position: absolute;
+        left: -4px;
+        bottom: -1px;
+        border-left: 5px solid transparent;
+        border-right: 5px solid transparent;
+        border-top: 7px solid #c6a56a;
+      }
+      .stream-stage, .omni-stage {
+        flex: 1;
+        display: grid;
+        place-items: center;
+      }
+      .stream-row {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+      .model-box {
+        width: 220px;
+        height: 140px;
+        border-radius: 16px;
+        background: #c6a56a;
+        color: #1a1714;
+        display: grid;
+        place-items: center;
+        font-family: "EB Garamond", serif;
+        font-size: 32px;
+      }
+      .flow {
+        font-family: Inter, sans-serif;
+        font-size: 18px;
+        color: #e7dcc8;
+        text-align: center;
+        width: 90px;
+      }
+      .omni-shell {
+        width: 100%;
+        height: 360px;
+        border-radius: 16px;
+        border: 1px solid #5c5348;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 28px;
+      }
+      .omni-title {
+        font-family: "EB Garamond", serif;
+        font-size: 36px;
+      }
+      .omni-jobs {
+        display: flex;
+        gap: 12px;
+      }
+      .faint {
+        width: 120px;
+        height: 72px;
+        border-radius: 10px;
+        border: 1px solid rgba(198, 165, 106, 0.55);
+        display: grid;
+        place-items: center;
+        font-family: Inter, sans-serif;
+        font-size: 16px;
+        color: #cbbba6;
+      }
+      .bar-wrap { margin-top: 120px; }
+      .mem-bar {
+        display: flex;
+        width: 100%;
+        height: 96px;
+        border-radius: 12px;
+        overflow: hidden;
+        background: #1c1916;
+        border: 1px solid #3d362e;
+      }
+      .seg {
+        height: 100%;
+        display: grid;
+        place-items: center;
+        font-family: Inter, sans-serif;
+        font-weight: 600;
+        font-size: 22px;
+        color: #1a1714;
+      }
+      .seg.listen { background: #a8b5a0; flex: 2.4; }
+      .seg.speak { background: #efe4cf; flex: 0.7; font-size: 16px; }
+      .seg.think { background: #c6a56a; flex: 9; }
+      .seg.free {
+        background: transparent;
+        color: #cbbba6;
+        flex: 11.6;
+        border-left: 1px solid #3d362e;
+      }
+      .mem-names {
+        display: flex;
+        margin-top: 16px;
+        font-family: Inter, sans-serif;
+        font-size: 20px;
+        color: #cbbba6;
+      }
+      .mem-names span { text-align: center; }
+      .mem-names .listen { flex: 2.4; }
+      .mem-names .speak { flex: 0.7; }
+      .mem-names .think { flex: 9; }
+      .mem-names .free { flex: 11.6; }
+      .total {
+        margin-top: 28px;
+        font-family: Inter, sans-serif;
+        font-size: 22px;
+        color: #c6a56a;
+      }
+      .units {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 32px;
+        margin-top: 80px;
+        align-items: end;
+      }
+      .unit { display: flex; flex-direction: column; align-items: center; gap: 22px; }
+      .unit p {
+        margin: 0;
+        font-family: Inter, sans-serif;
+        font-size: 22px;
+        color: #e7dcc8;
+        text-align: center;
+      }
+      .sliver {
+        width: 18px;
+        height: 220px;
+        border-radius: 9px;
+        background: linear-gradient(#c6a56a, #a8b5a0);
+      }
+      .window {
+        width: 240px;
+        height: 160px;
+        border-radius: 12px;
+        border: 1px solid #c6a56a;
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .window i {
+        display: block;
+        height: 8px;
+        border-radius: 4px;
+        background: #3d362e;
+      }
+      .window i.on { background: #c6a56a; width: 70%; }
+      .token {
+        width: 88px;
+        height: 88px;
+        border-radius: 12px;
+        background: #c6a56a;
+        color: #1a1714;
+        display: grid;
+        place-items: center;
+        font-family: "EB Garamond", serif;
+        font-size: 40px;
+      }
+      .sentence {
+        width: 320px;
+        padding: 22px 24px;
+        border-radius: 12px;
+        background: #efe4cf;
+        color: #1a1714;
+        font-family: "EB Garamond", serif;
+        font-size: 26px;
+        line-height: 1.25;
+      }
+      .clocks { margin-top: 56px; display: flex; flex-direction: column; gap: 28px; }
+      .clock {
+        display: grid;
+        grid-template-columns: 180px 1fr 280px;
+        align-items: center;
+        gap: 24px;
+      }
+      .clock .name {
+        font-family: Inter, sans-serif;
+        font-size: 28px;
+        color: #f4efe6;
+      }
+      .rail {
+        position: relative;
+        height: 2px;
+        background: #3d362e;
+      }
+      .tick {
+        position: absolute;
+        top: -8px;
+        width: 2px;
+        height: 18px;
+        background: #c6a56a;
+      }
+      .stamp {
+        font-family: Inter, sans-serif;
+        font-size: 22px;
+        color: #cbbba6;
+      }
+      .bad {
+        margin-top: 36px;
+        font-family: Inter, sans-serif;
+        font-size: 28px;
+        color: #e7b2a4;
+      }
+      .bars {
+        display: flex;
+        align-items: flex-end;
+        gap: 36px;
+        height: 500px;
+        margin-top: 28px;
+        padding: 0 40px;
+        justify-content: space-evenly;
+      }
+      .col { display: flex; flex-direction: column; align-items: center; gap: 16px; width: 220px; }
+      .col .val {
+        font-family: "EB Garamond", serif;
+        font-size: 36px;
+        color: #f4efe6;
+      }
+      .column {
+        width: 120px;
+        border-radius: 10px 10px 4px 4px;
+        background: #c6a56a;
+        transform-origin: center bottom;
+      }
+      .column.dim { background: #5c4b32; }
+      .col .lab {
+        font-family: Inter, sans-serif;
+        font-size: 18px;
+        color: #cbbba6;
+      }
+      .gpus {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 28px;
+        margin-top: 48px;
+      }
+      .gpu {
+        background: #1c1916;
+        border: 1px solid #3d362e;
+        border-radius: 18px;
+        padding: 28px;
+        min-height: 520px;
+      }
+      .gpu h2 {
+        margin: 0 0 8px;
+        font-family: Inter, sans-serif;
+        font-weight: 500;
+        font-size: 18px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: #c6a56a;
+      }
+      .gpu .sub {
+        margin: 0 0 28px;
+        font-family: Inter, sans-serif;
+        font-size: 20px;
+        color: #cbbba6;
+      }
+      .stage {
+        border-radius: 12px;
+        padding: 22px 24px;
+        margin-bottom: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-family: Inter, sans-serif;
+        font-size: 28px;
+        color: #1a1714;
+      }
+      .stage b { font-weight: 600; }
+      .stage span { font-size: 20px; }
+      .stage.thinker { background: #c6a56a; }
+      .stage.talker { background: #e7dcc8; }
+      .stage.codec { background: #a8b5a0; width: 42%; }
+      .outside {
+        font-family: "EB Garamond", serif;
+        font-size: 42px;
+      }
+      .kicker, h1, .caption, .node, .arrow, .panel h2, .flow, .model-box,
+      .omni-shell, .faint, .mem-bar, .seg, .mem-names, .total, .unit, .clock, .bad,
+      .col, .gpu {
+        opacity: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="48" data-width="1920" data-height="1080">
+      <section id="architectures" class="clip" data-start="0" data-duration="8" data-track-index="1">
+        <p class="kicker" id="a-kicker">the map</p>
+        <h1 id="a-title">three architectures</h1>
+        <div class="panels">
+          <article class="panel" id="panel-chain">
+            <h2 id="chain-h">the chain</h2>
+            <div class="chain">
+              <div class="node audio" id="c1">audio</div>
+              <i class="arrow" id="c-arrow-1"></i>
+              <div class="node listen" id="c2">listen</div>
+              <i class="arrow" id="c-arrow-2"></i>
+              <div class="node think" id="c3">think</div>
+              <i class="arrow" id="c-arrow-3"></i>
+              <div class="node speak" id="c4">speak</div>
+              <i class="arrow" id="c-arrow-4"></i>
+              <div class="node audio" id="c5">audio</div>
+            </div>
+          </article>
+          <article class="panel" id="panel-stream">
+            <h2 id="stream-h">the stream</h2>
+            <div class="stream-stage">
+              <div class="stream-row">
+                <div class="flow" id="flow-in">audio in</div>
+                <div class="model-box" id="stream-box">one model</div>
+                <div class="flow" id="flow-out">audio out</div>
+              </div>
+            </div>
+          </article>
+          <article class="panel" id="panel-omni">
+            <h2 id="omni-h">omni</h2>
+            <div class="omni-stage">
+              <div class="omni-shell" id="omni-shell">
+                <div class="omni-title" id="omni-title">one model</div>
+                <div class="omni-jobs">
+                  <div class="faint" id="f1">listen</div>
+                  <div class="faint" id="f2">think</div>
+                  <div class="faint" id="f3">speak</div>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+        <p class="caption" id="a-cap">three shapes. one question: where does the work live?</p>
+      </section>
+
+      <section id="residency" class="clip" data-start="8" data-duration="8" data-track-index="2">
+        <p class="kicker" id="r-kicker">one gpu, three models resident</p>
+        <h1 id="r-title">23.7 gb, and room to spare</h1>
+        <div class="bar-wrap" id="bar-wrap">
+          <div class="mem-bar" id="mem-bar">
+            <div class="seg listen" id="seg-listen">2.4</div>
+            <div class="seg speak" id="seg-speak">0.7</div>
+            <div class="seg think" id="seg-think">9</div>
+            <div class="seg free" id="seg-free">11.6 free</div>
+          </div>
+          <div class="mem-names">
+            <span class="listen">listen</span>
+            <span class="speak">speak</span>
+            <span class="think">think</span>
+            <span class="free">still empty</span>
+          </div>
+          <p class="total" id="r-total">weights, cache, and the rest. memory was never the constraint.</p>
+        </div>
+        <p class="caption" id="r-cap">scheduling was.</p>
+      </section>
+
+      <section id="units" class="clip" data-start="16" data-duration="8" data-track-index="3">
+        <p class="kicker" id="u-kicker">what streaming means here</p>
+        <h1 id="u-title">four units of progress</h1>
+        <div class="units">
+          <div class="unit" id="unit-1">
+            <div class="sliver" id="shape-sliver"></div>
+            <p>a sliver of audio</p>
+          </div>
+          <div class="unit" id="unit-2">
+            <div class="window" id="shape-window">
+              <i class="on"></i><i></i><i class="on"></i><i></i>
+            </div>
+            <p>a re-transcribed window</p>
+          </div>
+          <div class="unit" id="unit-3">
+            <div class="token" id="shape-token">t</div>
+            <p>a token</p>
+          </div>
+          <div class="unit" id="unit-4">
+            <div class="sentence" id="shape-sentence">one short sentence.</div>
+            <p>a sentence</p>
+          </div>
+        </div>
+        <p class="caption" id="u-cap">hand the next stage the smallest thing that is already useful.</p>
+      </section>
+
+      <section id="clocks" class="clip" data-start="24" data-duration="8" data-track-index="4">
+        <p class="kicker" id="k-kicker">experimental design</p>
+        <h1 id="k-title">four clocks</h1>
+        <div class="clocks">
+          <div class="clock" id="clock-audio">
+            <div class="name">audio</div>
+            <div class="rail" id="rail-audio"><i class="tick" style="left: 6%"></i><i class="tick" style="left: 22%"></i><i class="tick" style="left: 38%"></i><i class="tick" style="left: 54%"></i><i class="tick" style="left: 70%"></i><i class="tick" style="left: 86%"></i></div>
+            <div class="stamp">frames of 80 ms</div>
+          </div>
+          <div class="clock" id="clock-gpu">
+            <div class="name">gpu</div>
+            <div class="rail" id="rail-gpu"><i class="tick" style="left: 14%"></i><i class="tick" style="left: 31%"></i><i class="tick" style="left: 47%"></i><i class="tick" style="left: 63%"></i><i class="tick" style="left: 80%"></i></div>
+            <div class="stamp">device time</div>
+          </div>
+          <div class="clock" id="clock-server">
+            <div class="name">server</div>
+            <div class="rail" id="rail-server"><i class="tick" style="left: 4%"></i><i class="tick" style="left: 28%"></i><i class="tick" style="left: 49%"></i><i class="tick" style="left: 71%"></i><i class="tick" style="left: 90%"></i></div>
+            <div class="stamp" id="stamp-server">t = 12.481</div>
+          </div>
+          <div class="clock" id="clock-browser">
+            <div class="name">browser</div>
+            <div class="rail" id="rail-browser"><i class="tick" style="left: 18%"></i><i class="tick" style="left: 36%"></i><i class="tick" style="left: 57%"></i><i class="tick" style="left: 74%"></i><i class="tick" style="left: 93%"></i></div>
+            <div class="stamp" id="stamp-browser">t = 4.902</div>
+          </div>
+        </div>
+        <p class="bad" id="k-bad">12.481 − 4.902 = a number that means nothing</p>
+        <p class="caption" id="k-cap">subtract two timestamps only when they came from the same clock.</p>
+      </section>
+
+      <section id="warmup" class="clip" data-start="32" data-duration="8" data-track-index="5">
+        <p class="kicker" id="w-kicker">log scale · full duplex</p>
+        <h1 id="w-title">the warmup cliff</h1>
+        <div class="bars">
+          <div class="col" id="col-1">
+            <div class="val">10.8 s</div>
+            <div class="column" id="bar-1" style="height: 400px"></div>
+            <div class="lab">first frame</div>
+          </div>
+          <div class="col" id="col-2">
+            <div class="val">987 ms</div>
+            <div class="column dim" id="bar-2" style="height: 300px"></div>
+            <div class="lab">second</div>
+          </div>
+          <div class="col" id="col-3">
+            <div class="val">476 ms</div>
+            <div class="column dim" id="bar-3" style="height: 230px"></div>
+            <div class="lab">third</div>
+          </div>
+          <div class="col" id="col-4">
+            <div class="val">49 ms</div>
+            <div class="column" id="bar-4" style="height: 64px"></div>
+            <div class="lab">settled</div>
+          </div>
+          <div class="col" id="col-5">
+            <div class="val">46 ms</div>
+            <div class="column" id="bar-5" style="height: 52px"></div>
+            <div class="lab">warm</div>
+          </div>
+        </div>
+        <p class="caption" id="w-cap">warmup moves the work off the critical path. the work still happens.</p>
+      </section>
+
+      <section id="pipeline" class="clip" data-start="40" data-duration="8" data-track-index="6">
+        <p class="kicker" id="p-kicker">from the outside</p>
+        <h1 id="p-title" class="outside">one model</h1>
+        <div class="gpus" id="gpu-grid">
+          <article class="gpu" id="gpu-0">
+            <h2>gpu 0</h2>
+            <p class="sub">memory fraction 0.9</p>
+            <div class="stage thinker"><b>thinker</b><span>0.9</span></div>
+          </article>
+          <article class="gpu" id="gpu-1">
+            <h2>gpu 1</h2>
+            <p class="sub">talker 0.6 · codec 0.1</p>
+            <div class="stage talker"><b>talker</b><span>0.6</span></div>
+            <div class="stage codec"><b>codec</b><span>0.1</span></div>
+          </article>
+        </div>
+        <p class="caption" id="p-cap">the chain did not disappear. it moved inside the runtime.</p>
+      </section>
+    </div>
+    <script>
+      const tl = gsap.timeline({ paused: true });
+      const S = 8;
+
+      const enter = (sel, t) =>
+        tl.fromTo(sel, { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, t);
+
+      enter("#a-kicker", 0.15);
+      enter("#a-title", 0.28);
+      ["#c1", "#c-arrow-1", "#c2", "#c-arrow-2", "#c3", "#c-arrow-3", "#c4", "#c-arrow-4", "#c5"].forEach((sel, i) => {
+        tl.fromTo(sel, { opacity: 0, x: -12 }, { opacity: 1, x: 0, duration: 0.28, ease: "power2.out" }, 0.7 + i * 0.12);
+      });
+      enter("#chain-h", 0.55);
+      enter("#stream-h", 2.3);
+      enter("#panel-stream", 2.35);
+      tl.fromTo("#flow-in", { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: 0.4 }, 2.7);
+      tl.fromTo("#stream-box", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 2.95);
+      tl.fromTo("#flow-out", { opacity: 0, x: 20 }, { opacity: 1, x: 0, duration: 0.4 }, 3.2);
+      enter("#omni-h", 4.3);
+      tl.fromTo("#omni-shell", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 4.5);
+      ["#f1", "#f2", "#f3"].forEach((sel, i) => {
+        tl.fromTo(sel, { opacity: 0 }, { opacity: 1, duration: 0.35 }, 5.2 + i * 0.18);
+      });
+      enter("#a-cap", 6.3);
+
+      enter("#r-kicker", S + 0.15);
+      enter("#r-title", S + 0.3);
+      tl.fromTo("#mem-bar", { scaleX: 0, opacity: 0, transformOrigin: "left center" }, { scaleX: 1, opacity: 1, duration: 0.9, ease: "power2.out" }, S + 1.0);
+      ["#seg-listen", "#seg-speak", "#seg-think", "#seg-free"].forEach((sel, i) => {
+        tl.fromTo(sel, { opacity: 0 }, { opacity: 1, duration: 0.3 }, S + 1.7 + i * 0.18);
+      });
+      enter(".mem-names", S + 2.6);
+      enter("#r-total", S + 3.3);
+      enter("#r-cap", S + 4.4);
+
+      enter("#u-kicker", 2 * S + 0.15);
+      enter("#u-title", 2 * S + 0.3);
+      ["#unit-1", "#unit-2", "#unit-3", "#unit-4"].forEach((sel, i) => {
+        tl.fromTo(sel, { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 2 * S + 0.9 + i * 0.35);
+      });
+      enter("#u-cap", 2 * S + 3.2);
+
+      enter("#k-kicker", 3 * S + 0.15);
+      enter("#k-title", 3 * S + 0.3);
+      ["#clock-audio", "#clock-gpu", "#clock-server", "#clock-browser"].forEach((sel, i) => {
+        tl.fromTo(sel, { opacity: 0, x: -16 }, { opacity: 1, x: 0, duration: 0.4 }, 3 * S + 0.8 + i * 0.28);
+      });
+      enter("#k-bad", 3 * S + 2.6);
+      enter("#k-cap", 3 * S + 4.0);
+
+      enter("#w-kicker", 4 * S + 0.15);
+      enter("#w-title", 4 * S + 0.3);
+      ["#col-1", "#col-2", "#col-3", "#col-4", "#col-5"].forEach((sel, i) => {
+        tl.fromTo(sel, { opacity: 0 }, { opacity: 1, duration: 0.2 }, 4 * S + 0.8 + i * 0.12);
+      });
+      ["#bar-1", "#bar-2", "#bar-3", "#bar-4", "#bar-5"].forEach((sel, i) => {
+        tl.fromTo(
+          sel,
+          { scaleY: 0, transformOrigin: "center bottom" },
+          { scaleY: 1, duration: 0.7, ease: "power2.out" },
+          4 * S + 0.9 + i * 0.12
+        );
+      });
+      enter("#w-cap", 4 * S + 2.6);
+
+      enter("#p-kicker", 5 * S + 0.15);
+      enter("#p-title", 5 * S + 0.35);
+      tl.fromTo("#gpu-0", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 5 * S + 1.7);
+      tl.fromTo("#gpu-1", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 5 * S + 2.15);
+      enter("#p-cap", 5 * S + 4.2);
+
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>
